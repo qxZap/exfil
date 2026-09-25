@@ -22,6 +22,8 @@ npm start          # → http://localhost:8080
 | `F` | flight mode: **ANGLE** · **ACRO** · **ASSIST** |
 | `C` (or `V`) | third person / first person (FPV, bolted to the airframe, rolls with it) |
 | `B` | intercepted hunter telemetry: what the hunters are thinking |
+| `H` | show / hide the on-screen controls panel |
+| `R` | restart the same city (any time, or on the end screen); `Enter` on the end screen: new city |
 
 **Flight modes**, like a real flight controller:
 - **ANGLE** (default): the sticks set the tilt angle, so 15° tilt flies ~15 m/s. It self-levels when you let go but doesn't brake, so you glide. Altitude is held unless you climb or descend.

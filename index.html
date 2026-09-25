@@ -40,6 +40,10 @@
   .go { background: var(--hud); color: #06140c; font-weight: 800; font-size: 16px; padding: 11px 26px; }
   .keys { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; color: #b9c3cd; margin: 10px 0 16px; }
   kbd { color: var(--hud); }
+  #keysPanel { bottom: 14px; left: 50%; transform: translateX(-50%); display: grid; grid-template-columns: repeat(4, auto); gap: 3px 16px; font-size: 12px; color: #b9c3cd; white-space: nowrap; }
+  #keysPanel kbd { margin-right: 4px; }
+  #keysHint { bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--dim); display: none; padding: 5px 10px; }
+  @media (max-width: 1100px) { #keysPanel { grid-template-columns: repeat(2, auto); bottom: 200px; } }
   #loading { position: fixed; inset: 0; display: none; place-items: center; background: #0b0e12; z-index: 6; color: var(--hud); letter-spacing: .2em; }
 </style>
 <script type="importmap">
@@ -85,6 +89,12 @@
   <div style="margin-top:6px"><span class="sens" id="sRADAR">RDR</span><span class="sens" id="sCAMERA">EO</span><span class="sens" id="sACOUSTIC">MIC</span></div>
 </div>
 
+<div id="keysPanel" class="panel">
+  <span><kbd>WASD</kbd>tilt</span><span><kbd>Q/E</kbd>yaw</span><span><kbd>Space/X</kbd>up / down</span><span><kbd>Shift</kbd>gentle</span>
+  <span><kbd>Mouse</kbd>look · aim</span><span><kbd>LMB</kbd>fire</span><span><kbd>F</kbd>mode: <b id="kMode">ANGLE</b></span><span><kbd>C</kbd>1st / 3rd person</span>
+  <span><kbd>B</kbd>hunter intel</span><span><kbd>Esc</kbd>free mouse</span><span><kbd>R</kbd>restart</span><span><kbd>H</kbd>hide these keys</span>
+</div>
+<div id="keysHint" class="panel"><kbd>H</kbd> controls</div>
 <div id="menu" class="screen">
   <div class="card">
     <h1>EXFIL</h1>
@@ -108,7 +118,7 @@
     <button class="go" id="start">Take off</button>
   </div>
 </div>
-<div id="over" class="screen" style="display:none"><div class="card"><h1 id="overTitle"></h1><p id="overWhy"></p><div class="keys" id="overStats"></div><button class="go" id="again">Same city</button> <button class="go" id="newCity" style="background:transparent;color:var(--ink)">New city</button> <button class="go" id="toMenu" style="background:transparent;color:var(--ink)">Menu</button></div></div>
+<div id="over" class="screen" style="display:none"><div class="card"><h1 id="overTitle"></h1><p id="overWhy"></p><div class="keys" id="overStats"></div><button class="go" id="again">Same city (R)</button> <button class="go" id="newCity" style="background:transparent;color:var(--ink)">New city (Enter)</button> <button class="go" id="toMenu" style="background:transparent;color:var(--ink)">Menu</button></div></div>
 <div id="loading">BUILDING CITY…</div>
 
 <script type="module">
@@ -343,6 +353,9 @@ addEventListener('keydown', e => {
   input.keys.add(k);
   if (k === 'v' || k === 'c') input.cam = input.cam === 'chase' ? 'nose' : 'chase';
   if (k === 'f') { input.mode = MODES[(MODES.indexOf(input.mode) + 1) % MODES.length]; toast(`${input.mode.toUpperCase()} MODE`); }
+  if (k === 'h') showKeys(!keysShown);
+  if (k === 'r' && game && (running || $('over').style.display === 'grid')) { start(settings.seed); return; } // retry, same city
+  if (k === 'enter' && $('over').style.display === 'grid') { start(1 + Math.floor(Math.random() * 1e6)); return; }
   if (k === 'b') { input.intel = !input.intel; $('intel').style.display = input.intel ? 'block' : 'none'; }
 });
 addEventListener('keyup', e => input.keys.delete(e.key.toLowerCase()));
@@ -542,7 +555,7 @@ function frame(now) {
     camera.position.copy(camPos);
     camera.lookAt(camPos.x + look.x * 100, camPos.y + look.y * 100, camPos.z + look.z * 100);
   }
-  $('fmode').textContent = input.mode.toUpperCase();
+  $('fmode').textContent = $('kMode').textContent = input.mode.toUpperCase();
   sun.position.set(p.x + 180, p.y + 400, p.z + 120); sun.target.position.set(p.x, p.y, p.z);
   hud();
   renderer.render(scene, camera);
@@ -553,6 +566,14 @@ requestAnimationFrame(frame);
 (async () => { game = await Game.create({ seed: 1, difficulty: 'normal', hunters: 1 }); buildCityMeshes(game);
   droneMeshes = game.drones.map(d => { const m = d === game.player ? droneMesh(0xe7ecef, 0x46e08a) : droneMesh(0x2a2d31, 0xff3030); scene.add(m); return m; });
   input.yaw = game.player.heading + 0.6; input.pitch = -0.25; })();
+// controls panel: on by default, H toggles, remembered per browser
+let keysShown = true;
+function showKeys(on) {
+  keysShown = on;
+  $('keysPanel').style.display = on ? 'grid' : 'none'; $('keysHint').style.display = on ? 'none' : 'block';
+  try { localStorage.setItem('exfil.keys', on ? '1' : '0'); } catch {}
+}
+try { showKeys(localStorage.getItem('exfil.keys') !== '0'); } catch { showKeys(true); }
 window.exfil = { get game() { return game; }, input, start, settings, renderer };
 </script>
 </body>
