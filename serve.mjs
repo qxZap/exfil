@@ -14,9 +14,12 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/ja
 const monitors = new Set();
 let latest = null;
 
-function handler(home) {
+const local = req => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+function handler(home, acceptsState) {
   return async (req, res) => {
     const url = new URL(req.url, 'http://x');
+    // only the game on this machine may publish state (the monitor port can be shared publicly)
+    if (url.pathname === '/state' && req.method === 'POST' && (!acceptsState || !local(req) || req.headers['x-forwarded-for'])) return res.writeHead(403).end();
     if (url.pathname === '/state' && req.method === 'POST') { // from the game
       let body = '';
       req.on('data', c => { body += c; if (body.length > 4e6) req.destroy(); });
@@ -32,6 +35,7 @@ function handler(home) {
       return;
     }
     const rel = normalize(decodeURIComponent(url.pathname)).replace(/^[\\/]+/, '');
+    if (rel.split(/[\\/]/).some(part => part.startsWith('.'))) return res.writeHead(404).end(); // no .git, no dotfiles
     const file = join(root, rel || home);
     if (file !== root && !file.startsWith(root + sep)) return res.writeHead(403).end();
     try {
@@ -44,8 +48,8 @@ function handler(home) {
 }
 
 const lan = Object.values(os.networkInterfaces()).flat().filter(a => a && a.family === 'IPv4' && !a.internal).map(a => a.address);
-http.createServer(handler('index.html')).listen(port, () => console.log(`Exfil game     http://localhost:${port}`));
-http.createServer(handler('spectator.html')).listen(port + 1, () => {
+http.createServer(handler('index.html', true)).listen(port, () => console.log(`Exfil game     http://localhost:${port}`));
+http.createServer(handler('spectator.html', false)).listen(port + 1, () => {
   console.log(`Hunter monitor http://localhost:${port + 1}`);
   for (const ip of lan) console.log(`  for a friend on your network: http://${ip}:${port + 1}`);
 });

@@ -45,7 +45,9 @@ const es = new EventSource('/stream');
 es.onopen = () => { $('conn').textContent = 'connected'; $('conn').style.color = 'var(--hud)'; };
 es.onerror = () => { $('conn').textContent = 'reconnecting…'; $('conn').style.color = 'var(--warn)'; };
 es.onmessage = async e => {
-  const s = JSON.parse(e.data), k = `${s.seed}:${s.diff}`;
+  let s; try { s = JSON.parse(e.data); } catch { return; }
+  if (!s || !s.seed || !s.diff || !Array.isArray(s.hunters)) return; // ignore anything that isn't a game snapshot
+  const k = `${s.seed}:${s.diff}`;
   if (k !== key && !building) { // a new game: rebuild the same city from its seed
     building = true; $('wait').textContent = 'Building the city…';
     await world.ensureModels();
