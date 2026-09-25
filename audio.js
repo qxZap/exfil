@@ -7,13 +7,13 @@ import { dist, len, sub, dot, norm } from './sim.js';
 const C = 343; // speed of sound, m/s
 
 export class Audio {
-  constructor() { this.ctx = null; this.muted = false; this.voice = true; }
+  constructor() { this.ctx = null; this.muted = false; this.voice = true; this.volume = 0.6; this.voiceVol = 0.8; }
 
   // must be called from a user gesture (browsers keep audio locked until then)
   start() {
     if (this.ctx) { this.ctx.resume(); return; }
     const ctx = this.ctx = new AudioContext();
-    this.master = ctx.createGain(); this.master.gain.value = 0.8;
+    this.master = ctx.createGain(); this.master.gain.value = this.volume * 1.2;
     const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4;
     this.master.connect(comp).connect(ctx.destination);
     // a city-sized echo for distant sounds: a synthetic impulse response (decaying noise)
@@ -45,20 +45,31 @@ export class Audio {
   }
   at(p, x) { const t = this.ctx.currentTime; p.positionX.setTargetAtTime(x.x, t, 0.02); p.positionY.setTargetAtTime(x.y, t, 0.02); p.positionZ.setTargetAtTime(x.z, t, 0.02); }
 
-  // ---------- your own drone: four rotors (blade-pass tone + harmonics), ESC whine, prop wash ----------
+  // ---------- your own drone: air chopped by the blades ----------
+  // Each rotor: band-passed noise whose loudness pulses at the blade-pass rate (AM), plus a quiet
+  // sine at that rate for body. That's the "whirr" of a real prop, not an electric buzz.
+  whirr(out, noiseQ = 1.4) {
+    const ctx = this.ctx;
+    const n = this.loop(this.white), bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = noiseQ;
+    const am = ctx.createGain(); am.gain.value = 0.55;
+    const lfo = ctx.createOscillator(); lfo.type = 'sine'; const depth = ctx.createGain(); depth.gain.value = 0.45;
+    lfo.connect(depth).connect(am.gain); lfo.start();
+    const body = ctx.createOscillator(); body.type = 'sine'; const bg = ctx.createGain(); bg.gain.value = 0.12;
+    body.connect(bg); body.start();
+    const g = ctx.createGain(); g.gain.value = 0;
+    n.connect(bp).connect(am).connect(g); bg.connect(g); g.connect(out);
+    return { bp, lfo, body, g };
+  }
+  setWhirr(v, bpf, level, t) {
+    v.lfo.frequency.setTargetAtTime(bpf, t, 0.03);
+    v.body.frequency.setTargetAtTime(bpf, t, 0.03);
+    v.bp.frequency.setTargetAtTime(300 + bpf * 3, t, 0.05);
+    v.g.gain.setTargetAtTime(level, t, 0.05);
+  }
   buildOwnDrone() {
-    const ctx = this.ctx, out = ctx.createGain(); out.gain.value = 0.5; out.connect(this.master);
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1800; lp.connect(out);
-    this.rotors = [0, 1, 2, 3].map(k => {
-      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.detune.value = (k - 1.5) * 6;
-      const g = ctx.createGain(); g.gain.value = 0; o.connect(g).connect(lp); o.start();
-      const whine = ctx.createOscillator(); whine.type = 'triangle';
-      const wg = ctx.createGain(); wg.gain.value = 0; whine.connect(wg).connect(out); whine.start();
-      return { o, g, whine, wg };
-    });
-    const wash = this.loop(this.white), bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.7;
-    this.washG = ctx.createGain(); this.washG.gain.value = 0; this.washBp = bp;
-    wash.connect(bp).connect(this.washG).connect(out);
+    const ctx = this.ctx, out = ctx.createGain(); out.gain.value = 0.6; out.connect(this.master);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2500; lp.connect(out);
+    this.rotors = [0, 1, 2, 3].map(() => this.whirr(lp));
   }
 
   // ---------- wind (airspeed + gusts), city hum ----------
@@ -74,25 +85,18 @@ export class Audio {
 
   // a positional voice for a hunter (or any other drone): tone + wash through a panner
   makeVoice() {
-    const ctx = this.ctx, pan = this.panner(15, 1.4, 1500), g = ctx.createGain(); g.gain.value = 0;
-    const o = ctx.createOscillator(); o.type = 'sawtooth';
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
-    const o2 = ctx.createOscillator(); o2.type = 'sawtooth'; o2.detune.value = 9;
-    const n = this.loop(this.white), bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 700; bp.Q.value = 0.8;
-    const ng = ctx.createGain(); ng.gain.value = 0.35;
-    o.connect(lp); o2.connect(lp); lp.connect(g); n.connect(bp).connect(ng).connect(g); g.connect(pan).connect(this.master);
-    o.start(); o2.start();
-    return { pan, g, o, o2 };
+    const pan = this.panner(8, 1.8, 900), v = this.whirr(pan, 1.1);
+    pan.connect(this.master);
+    return { pan, ...v };
   }
-  makeHeli() { // main rotor slap: low noise, amplitude-modulated at the blade-pass rate (~19 Hz)
+  makeHeli() { // main rotor slap: low noise, amplitude-modulated at the blade-pass rate (~19 Hz); no whine
     const ctx = this.ctx, pan = this.panner(60, 1.1, 4000);
     const n = this.loop(this.brown), lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
     const am = ctx.createGain(); am.gain.value = 0.5;
     const lfo = ctx.createOscillator(); lfo.frequency.value = 18.5; const lg = ctx.createGain(); lg.gain.value = 0.5;
     lfo.connect(lg).connect(am.gain); lfo.start();
-    const whine = ctx.createOscillator(); whine.type = 'sine'; whine.frequency.value = 1650; const wg = ctx.createGain(); wg.gain.value = 0.02;
     const g = ctx.createGain(); g.gain.value = 1.4;
-    n.connect(lp).connect(am).connect(g); whine.connect(wg).connect(g); g.connect(pan).connect(this.master);
+    n.connect(lp).connect(am).connect(g); g.connect(pan).connect(this.master);
     return { pan };
   }
 
@@ -145,7 +149,7 @@ export class Audio {
     const dur = Math.min(0.9 + text.length * 0.055, 5.5);
     if (voice && this.voice && 'speechSynthesis' in window) {
       const u = new SpeechSynthesisUtterance(text);
-      u.rate = 1.12; u.pitch = 0.85; u.volume = 0.9;
+      u.rate = 1.12; u.pitch = 0.85; u.volume = this.voiceVol;
       const v = speechSynthesis.getVoices().find(v => /en(-|_)(US|GB)/i.test(v.lang) && /male|david|george|daniel|guy/i.test(v.name)) || speechSynthesis.getVoices().find(v => /^en/i.test(v.lang));
       if (v) u.voice = v;
       speechSynthesis.cancel(); speechSynthesis.speak(u);
@@ -168,22 +172,13 @@ export class Audio {
   update(game, camera, dt, { cut = false } = {}) {
     if (!this.ctx || !game) return;
     const ctx = this.ctx, t = ctx.currentTime, P = game.player, L = ctx.listener;
-    this.master.gain.setTargetAtTime(this.muted ? 0 : 0.8, t, 0.05);
+    this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume * 1.2, t, 0.05);
     // listener = camera
     const f = camera.getWorldDirection(camera.userData.tmpDir ??= camera.position.clone()), u = camera.up;
     L.positionX.value = camera.position.x; L.positionY.value = camera.position.y; L.positionZ.value = camera.position.z;
     L.forwardX.value = f.x; L.forwardY.value = f.y; L.forwardZ.value = f.z; L.upX.value = u.x; L.upY.value = u.y; L.upZ.value = u.z;
-    // own rotors: blade-pass frequency = ω · 2 blades / 2π; loudness with thrust; ESC whine at 7 pole pairs
-    P.rotors.forEach((r, k) => {
-      const bpf = Math.max(20, r.w * 2 / (2 * Math.PI)), v = this.rotors[k];
-      v.o.frequency.setTargetAtTime(bpf, t, 0.02);
-      v.g.gain.setTargetAtTime(r.health > 0 ? Math.min(0.09, 0.012 + r.thrust * 0.005) : 0, t, 0.03);
-      v.whine.frequency.setTargetAtTime(r.w * 7 / (2 * Math.PI), t, 0.02);
-      v.wg.gain.setTargetAtTime(r.health > 0 ? Math.min(0.012, r.w / 1000 * 0.012) : 0, t, 0.03);
-    });
-    const thrust = P.rotors.reduce((s, r) => s + r.thrust, 0);
-    this.washG.gain.setTargetAtTime(Math.min(0.35, thrust * 0.006), t, 0.05);
-    this.washBp.frequency.setTargetAtTime(400 + thrust * 12, t, 0.05);
+    // own rotors: blade-pass rate = ω · 2 blades / 2π; loudness with each rotor's thrust
+    P.rotors.forEach((r, k) => this.setWhirr(this.rotors[k], Math.max(8, r.w * 2 / (2 * Math.PI)), r.health > 0 ? Math.min(0.14, 0.01 + r.thrust * 0.009) : 0, t));
     // wind: airspeed (relative to the moving air) and height
     const air = len(sub(P.vel, game.windAt(P.pos)));
     this.windG.gain.setTargetAtTime(Math.min(0.5, 0.02 + air * air * 0.0006), t, 0.1);
@@ -199,8 +194,7 @@ export class Audio {
       const w = d.rotors.reduce((s, r) => s + r.w, 0) / 4, rel = sub(d.pos, lp), r = len(rel) || 1;
       const closing = -dot(sub(d.vel, P.vel), { x: rel.x / r, y: rel.y / r, z: rel.z / r });
       const dop = C / Math.max(C - closing, 50);
-      v.o.frequency.setTargetAtTime(w * 2 / (2 * Math.PI) * dop, t, 0.03); v.o2.frequency.setTargetAtTime(w * 2.01 / (2 * Math.PI) * dop, t, 0.03);
-      v.g.gain.setTargetAtTime(d.alive ? 0.5 : 0, t, 0.05);
+      this.setWhirr(v, w * 2 / (2 * Math.PI) * dop, d.alive ? 0.4 : 0, t);
       this.at(v.pan, d.pos);
     });
     // helicopters

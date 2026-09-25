@@ -93,45 +93,90 @@ function radioLog(from, text) {
   $('radioLog').innerHTML = radioLines.map(l => `<div class="${l.from === 'OPS' ? 'ops' : 'net'}"><b>${l.from}</b> ${l.text}</div>`).join('');
 }
 const radio = new RadioNet(audio, radioLog);
+// volume: two sliders on the start screen (saved per browser), - / = during play
+function setVolume(v, voice = audio.voiceVol) {
+  audio.volume = Math.max(0, Math.min(1, v)); audio.voiceVol = Math.max(0, Math.min(1, voice));
+  $('vol').value = Math.round(audio.volume * 100); $('volV').textContent = `${$('vol').value}%`;
+  $('voiceVol').value = Math.round(audio.voiceVol * 100); $('voiceVolV').textContent = `${$('voiceVol').value}%`;
+  try { localStorage.setItem('exfil.vol', audio.volume); localStorage.setItem('exfil.voiceVol', audio.voiceVol); } catch {}
+}
+{
+  let v = 0.6, vv = 0.8;
+  try { v = +(localStorage.getItem('exfil.vol') ?? 0.6); vv = +(localStorage.getItem('exfil.voiceVol') ?? 0.8); } catch {}
+  setVolume(v, vv);
+  $('vol').oninput = e => setVolume(e.target.value / 100);
+  $('voiceVol').oninput = e => setVolume(audio.volume, e.target.value / 100);
+}
 const tmpS = new THREE.Vector3();
 
 // ---------------------------------------------------------------- city meshes
-// buildings: procedural facades from world position (no textures): floors, windows that vary per
-// building, reflective glass, lit rooms, shopfronts at street level, weathering, gravel roofs
-function windowed(params, size = 3.3) {
+// buildings: procedural facades laid out in each building's OWN coordinates (per-instance size and
+// seed), so windows fit exactly between the corner pillars, floors start at the building's base,
+// and every building keeps one consistent style: punched windows, ribbon glazing or curtain wall
+function windowed(params, house = false) {
   return std(params, sh => {
     WORLD_VARYINGS(sh);
-    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        float grime = vnoise(vWPos.xz * 0.05 + vWPos.y * 0.03) * 0.25 + vnoise(vWPos.xy * 0.4) * 0.08;
-        if (vWNorm.y > 0.5) {                                            // roofs: gravel, darker
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec3 aSize; attribute float aSeed;\nvarying vec3 vLocal; varying vec3 vSize; varying float vSeed;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n vLocal = position * aSize; vSize = aSize; vSeed = aSeed;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vLocal; varying vec3 vSize; varying float vSeed;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        const bool HOUSE = ${house};
+        float grime = vnoise(vWPos.xz * 0.05 + vWPos.y * 0.03) * 0.22 + vnoise(vWPos.xy * 0.4 + vWPos.zy * 0.4) * 0.07;
+        if (vWNorm.y > 0.5) {                                             // roof: gravel
           diffuseColor.rgb *= 0.55 + 0.25 * vnoise(vWPos.xz * 0.8);
           roughnessFactor = 1.0;
-        } else if (vWPos.y > 3.4) {
-          float u = abs(vWNorm.x) > 0.5 ? vWPos.z : vWPos.x;
-          float bid = h21(floor(vWPos.xz / 55.0));                      // roughly one value per building
-          float ww = ${size.toFixed(1)} * (0.8 + 0.6 * bid), fh = 3.3 + 0.8 * fract(bid * 7.3);
-          vec2 f = vec2(fract(u / ww), fract(vWPos.y / fh));
-          vec2 cell = vec2(floor(u / ww), floor(vWPos.y / fh));
-          float wx = 0.12 + 0.18 * fract(bid * 3.1);                     // ribbon glass ... punched windows
-          float win = step(wx, f.x) * step(f.x, 1.0 - wx) * step(0.26, f.y) * step(f.y, 0.84);
-          float slab = smoothstep(0.0, 0.06, f.y) * (1.0 - smoothstep(0.1, 0.16, f.y)); // floor slab line
-          float lit = step(0.86, h21(cell + floor(vWPos.xz * 0.02)));
-          float broken = step(0.985, h21(cell * 1.7 + bid));              // war zone: some panes blown out
-          vec3 glass = mix(vec3(0.05, 0.07, 0.09), vec3(0.14, 0.18, 0.22), fract(bid * 11.0));
-          diffuseColor.rgb *= 1.0 - grime - slab * 0.18;
-          diffuseColor.rgb = mix(diffuseColor.rgb, glass, win * 0.85);
+        } else if (abs(vWNorm.y) < 0.5) {
+          bool xFace = abs(vWNorm.x) > 0.5;
+          float faceW = xFace ? vSize.z : vSize.x;
+          float u = (xFace ? vLocal.z : vLocal.x) + faceW * 0.5;          // metres from the face's left corner
+          float v = vLocal.y + vSize.y * 0.5;                              // metres above the building's base
+          float s1 = fract(vSeed * 13.13), s2 = fract(vSeed * 71.71), s3 = fract(vSeed * 5.37);
+          float fh = HOUSE ? 2.9 : 3.2 + s2 * 0.8;                         // floor height
+          float ground = HOUSE ? 0.35 : fh * 1.3;                          // ground floor (shops) in the city
+          float pillar = HOUSE ? 0.7 : 0.9 + s2 * 0.6;                     // corner pillars
+          float usable = max(faceW - 2.0 * pillar, 0.6);
+          float cols = max(1.0, floor(usable / (HOUSE ? 2.8 : mix(1.8, 3.8, s1))));
+          float uu = (u - pillar) / (usable / cols);
+          float top = vSize.y - (HOUSE ? 0.4 : 1.3);                       // parapet above the last floor
+          float floors = max(1.0, floor((top - ground) / fh));
+          float vv = (v - ground) / ((top - ground) / floors);
+          vec2 f = vec2(fract(uu), fract(vv));
+          float inside = step(0.0, uu) * step(uu, cols) * step(0.0, vv) * step(vv, floors);
+          float style = HOUSE ? 0.0 : s3;                                  // punched / ribbon / curtain wall
+          float wx = style < 0.4 ? 0.2 : style < 0.72 ? 0.035 : 0.025;
+          float wy0 = style < 0.72 ? 0.3 : 0.05, wy1 = style < 0.72 ? 0.84 : 0.96;
+          float win = inside * step(wx, f.x) * step(f.x, 1.0 - wx) * step(wy0, f.y) * step(f.y, wy1);
+          float side = xFace ? sign(vWNorm.x) : 2.0 * sign(vWNorm.z);
+          vec2 cell = vec2(floor(uu), floor(vv)) + vec2(vSeed * 173.0 + side * 31.0, side * 17.0);
+          float lit = step(0.85, h21(cell));
+          float broken = step(0.985, h21(cell * 1.7 + 3.1));                // war zone: a few panes blown out
+          float sill = inside * (1.0 - win) * step(wy0 - 0.06, f.y) * step(f.y, wy0) * step(wx, f.x) * step(f.x, 1.0 - wx);
+          float slab = style < 0.72 ? 0.0 : inside * (1.0 - step(0.05, f.y)); // curtain wall: floor lines
+          vec3 glass = mix(vec3(0.05, 0.07, 0.09), vec3(0.15, 0.19, 0.23), s2);
+          diffuseColor.rgb *= 1.0 - grime;
+          diffuseColor.rgb *= 1.0 - sill * 0.25 - slab * 0.35;
+          float cornice = step(top, v) * (1.0 - step(top + 0.25, v));      // band under the parapet
+          diffuseColor.rgb *= 1.0 - cornice * 0.35;
+          diffuseColor.rgb = mix(diffuseColor.rgb, glass, win * 0.88);
           roughnessFactor = mix(roughnessFactor, broken > 0.5 ? 1.0 : 0.08, win);
           metalnessFactor = mix(metalnessFactor, broken > 0.5 ? 0.0 : 0.65, win);
           if (broken > 0.5) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.02), win);
           totalEmissiveRadiance += win * lit * (1.0 - broken) * vec3(1.0, 0.72, 0.38) * 0.5;
-        } else {
-          float u = abs(vWNorm.x) > 0.5 ? vWPos.z : vWPos.x;             // shopfronts at street level
-          float shop = step(0.12, fract(u / 9.0)) * step(0.35, vWPos.y) * (1.0 - step(3.0, vWPos.y));
-          diffuseColor.rgb = mix(diffuseColor.rgb * (1.0 - grime), vec3(0.08, 0.09, 0.1), shop * 0.85);
-          roughnessFactor = mix(roughnessFactor, 0.15, shop);
-          metalnessFactor = mix(metalnessFactor, 0.5, shop);
-          totalEmissiveRadiance += shop * vec3(0.9, 0.8, 0.6) * 0.16 * step(0.5, h21(vec2(floor(u / 9.0), floor(vWPos.x * 0.02 + vWPos.z * 0.013))));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.15), step(3.0, vWPos.y) * 0.8); // awning band
+          if (HOUSE) {                                                     // a front door on one face
+            float door = step(abs(u - faceW * 0.5), 0.55) * step(v, 2.2) * step(0.5, fract(vSeed * 3.0 + side * 0.25));
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.15, 0.09), door);
+          } else if (v < ground) {                                         // shopfronts: bays with glass and awnings
+            float bays = max(1.0, floor(usable / 6.0)), bu = (u - pillar) / (usable / bays), bf = fract(bu);
+            float shop = step(0.0, bu) * step(bu, bays) * step(0.06, bf) * step(bf, 0.94) * step(0.3, v) * step(v, ground - 0.9);
+            float awning = step(0.0, bu) * step(bu, bays) * step(ground - 0.9, v) * step(v, ground - 0.55);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.07, 0.08, 0.09), shop * 0.9);
+            diffuseColor.rgb = mix(diffuseColor.rgb, mix(vec3(0.45, 0.12, 0.1), vec3(0.12, 0.3, 0.35), step(0.5, h21(vec2(floor(bu), vSeed * 9.0)))), awning);
+            roughnessFactor = mix(roughnessFactor, 0.12, shop);
+            metalnessFactor = mix(metalnessFactor, 0.55, shop);
+            totalEmissiveRadiance += shop * vec3(0.9, 0.8, 0.6) * 0.16 * step(0.45, h21(vec2(floor(bu), vSeed * 5.0 + side)));
+          }
         }`);
   });
 }
@@ -163,7 +208,10 @@ function buildCityMeshes(game) {
   const palette = { tower: [0x8d97a3, 0x6f7a86, 0xa7a196, 0x5d6670], block: [0xa09382, 0x8b8579, 0xb3a58e, 0x7d7468], warehouse: [0x7c7f78, 0x8e8a7c], stack: [0x6a6259], house: [0xd8cdb8, 0xc2b59b, 0xe0d6c8, 0xb8a58a, 0x9fb0b8] };
   const tall = B.filter(b => b.kind !== 'house'), houses = B.filter(b => b.kind === 'house');
   const mk = (list, mat) => {
-    const im = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, list.length);
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    geo.setAttribute('aSize', new THREE.InstancedBufferAttribute(new Float32Array(list.flatMap(b => [b.hx * 2, b.hy * 2, b.hz * 2])), 3));
+    geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(new Float32Array(list.map(b => b.shade * 97.13 + b.x * 0.013 + b.z * 0.007)), 1));
+    const im = new THREE.InstancedMesh(geo, mat, list.length);
     list.forEach((b, i) => {
       m4.makeScale(b.hx * 2, b.hy * 2, b.hz * 2).setPosition(b.x, b.y, b.z);
       im.setMatrixAt(i, m4);
@@ -173,7 +221,7 @@ function buildCityMeshes(game) {
     cityGroup.add(im);
   };
   mk(tall, windowed({ roughness: 0.82, metalness: 0.08 }));
-  mk(houses, windowed({ roughness: 0.9 }, 2.6));
+  mk(houses, windowed({ roughness: 0.9 }, true));
   // roofs on houses
   const roofs = new THREE.InstancedMesh(new THREE.ConeGeometry(0.72, 1, 4, 1).rotateY(Math.PI / 4), std({ color: 0x8a4b3a, roughness: 0.9 }), houses.length);
   houses.forEach((b, i) => { m4.makeScale(b.hx * 2, 2.6, b.hz * 2).setPosition(b.x, b.y + b.hy + 1.3, b.z); roofs.setMatrixAt(i, m4); roofs.setColorAt(i, col.setHex([0x8a4b3a, 0x5b5f66, 0x6d3b2f][Math.floor(b.shade * 3)])); });
@@ -375,6 +423,7 @@ addEventListener('keydown', e => {
   if (k === 'f') { input.mode = MODES[(MODES.indexOf(input.mode) + 1) % MODES.length]; toast(`${input.mode.toUpperCase()} MODE`); }
   if (k === 'k') showKeys(!keysShown);
   if (k === 'm') { audio.muted = !audio.muted; toast(audio.muted ? 'SOUND OFF' : 'SOUND ON'); }
+  if (k === '-' || k === '=' || k === '+') { setVolume(audio.volume + (k === '-' ? -0.1 : 0.1)); toast(`VOLUME ${Math.round(audio.volume * 100)}%`); }
   if (k === 'n') { audio.voice = !audio.voice; if (!audio.voice) speechSynthesis?.cancel(); toast(audio.voice ? 'RADIO VOICE ON' : 'RADIO VOICE OFF (garbled only)'); }
   if (k === 'h') { input.head = !input.head; toast(input.head ? 'HEAD FIRST · SPRINT' : 'FACE FIRST'); }
   if (k === 'r' && game && (running || $('over').style.display === 'grid')) { start(settings.seed); return; } // retry, same city
