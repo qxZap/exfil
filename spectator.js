@@ -323,14 +323,19 @@ function drawScope(h, x, cx, cy, R) {
   const sw = (performance.now() / 1000 * 2.2) % (Math.PI * 2);
   g2.strokeStyle = 'rgba(157,255,198,.45)'; g2.beginPath(); g2.moveTo(cx, cy); g2.lineTo(cx + Math.sin(sw) * R, cy - Math.cos(sw) * R); g2.stroke();
   for (const hh of game.helis) { const q = pt(hh.pose.p); if (!q.clip) { g2.fillStyle = '#ffd24a'; g2.fillRect(q.x - 2, q.y - 2, 4, 4); } }
-  for (const w of game.hunters) { if (w === h || !w.x?.alive) continue; const q = pt(w.d.pos); if (!q.clip) { g2.fillStyle = MODE_COL[w.mode] ?? '#9dffc6'; g2.beginPath(); g2.arc(q.x, q.y, 2.2, 0, Math.PI * 2); g2.fill(); } }
-  if (x.trk) {
-    const q = pt({ x: x.trk.p[0], z: x.trk.p[2] });
+  g2.font = '9px ui-monospace, Consolas';
+  for (const w of game.hunters) { if (w === h || !w.x?.alive) continue; const q = pt(w.d.pos); if (!q.clip) { g2.fillStyle = MODE_COL[w.mode] ?? '#9dffc6'; g2.beginPath(); g2.arc(q.x, q.y, 2.2, 0, Math.PI * 2); g2.fill(); if (R > 60) g2.fillText(w.d.name, q.x + 4, q.y + 3); } }
+  if (x.trk) { // what THIS hunter believes about the target (its own sensors or the data link), not the truth
+    const q = pt({ x: x.trk.p[0], z: x.trk.p[2] }), d = Math.hypot(x.trk.p[0] - me.x, x.trk.p[2] - me.z);
     g2.fillStyle = x.trk.own ? '#ff4a4a' : '#ffaa3c'; g2.beginPath(); g2.arc(q.x, q.y, 4, 0, Math.PI * 2); g2.fill();
-    g2.font = '10px ui-monospace, Consolas'; g2.fillText(x.trk.src[0], q.x + 6, q.y - 4);
+    g2.font = '10px ui-monospace, Consolas'; g2.fillText(`TGT ${Math.round(d)}m ${x.trk.own ? x.trk.src : 'link'}`, q.x + 6, q.y - 4);
   }
   g2.fillStyle = 'rgba(157,255,198,.8)'; g2.font = '10px ui-monospace, Consolas';
   g2.fillText(`${range} m`, cx - R + 2, cy + R - 2);
-  g2.beginPath(); g2.moveTo(cx, cy - 5); g2.lineTo(cx - 3, cy + 3); g2.lineTo(cx + 3, cy + 3); g2.fill();
+  // the owner: this hunter at the centre, its name on top
+  const col = MODE_COL[h.mode] ?? '#9dffc6';
+  g2.fillStyle = col; g2.beginPath(); g2.moveTo(cx, cy - 6); g2.lineTo(cx - 4, cy + 4); g2.lineTo(cx + 4, cy + 4); g2.fill();
+  g2.font = `bold ${R > 60 ? 11 : 9}px ui-monospace, Consolas`; g2.textAlign = 'center';
+  g2.fillText(`${h.d.name.toUpperCase()} RADAR`, cx, cy - R - 6); g2.textAlign = 'left';
   g2.restore();
 }

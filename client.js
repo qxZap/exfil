@@ -97,7 +97,7 @@ addEventListener('keydown', e => {
   if (k === '-' || k === '=' || k === '+') { setVolume(audio.volume + (k === '-' ? -0.1 : 0.1)); toast(`VOLUME ${Math.round(audio.volume * 100)}%`); }
   if (k === 'n') { audio.radioOn = !audio.radioOn; toast(audio.radioOn ? 'INTERCEPT RECEIVER ON' : 'INTERCEPT RECEIVER OFF'); }
   if (k === 'h') { input.head = !input.head; toast(input.head ? 'HEAD FIRST · SPRINT' : 'FACE FIRST'); }
-  if (k === 'r' && game && (running || $('over').style.display === 'grid')) { start(settings.seed); return; } // retry, same city
+  if (game && ((k === 'backspace' && running) || (k === 'r' && $('over').style.display === 'grid'))) { e.preventDefault(); start(settings.seed); return; } // retry, same city
   if (k === 'enter' && $('over').style.display === 'grid') { start(1 + Math.floor(Math.random() * 1e6)); return; }
   if (k === 'b') { input.intel = !input.intel; $('intel').style.display = input.intel ? 'block' : 'none'; }
 });
@@ -112,7 +112,7 @@ function playerCommand(dt) {
   const fx = (held('w', 'arrowup') ? 1 : 0) - (held('s', 'arrowdown') ? 1 : 0);
   const rx = (held('d', 'arrowright') ? 1 : 0) - (held('a', 'arrowleft') ? 1 : 0);
   const yawKey = (held('q') ? 1 : 0) - (held('e') ? 1 : 0); // +heading = turn left
-  const up = (held(' ') ? 1 : 0) - (held('x') ? 1 : 0);
+  const up = (held(' ') ? 1 : 0) - (held('x') ? 1 : 0), dive = held('r');
   const gentle = held('shift') ? 0.35 : 1;
   input.stick.fwd = ramp(input.stick.fwd, fx * gentle, dt);
   input.stick.right = ramp(input.stick.right, rx * gentle, dt);
@@ -120,10 +120,10 @@ function playerCommand(dt) {
   if (input.mode === 'acro') { // rates: flips and rolls; throttle is yours (around hover)
     input.yaw = P.heading;
     const hover = P.mass * 9.81 / (4 * AIRFRAME.maxThrust);
-    return { mode: 'acro', rates: { pitch: input.stick.fwd * 4.5, roll: input.stick.right * 4.5, yaw: yawKey * 2.5 }, throttle: hover * (1 + 0.9 * Math.max(0, up)) - hover * 0.8 * Math.max(0, -up), cut, aim, fire: input.firing };
+    return { mode: 'acro', rates: { pitch: input.stick.fwd * 4.5, roll: input.stick.right * 4.5, yaw: yawKey * 2.5 }, throttle: dive ? hover * 0.1 : hover * (1 + 0.9 * Math.max(0, up)) - hover * 0.8 * Math.max(0, -up), cut, aim, fire: input.firing };
   }
   input.yaw += yawKey * 1.8 * dt;
-  const vz = up * (held('shift') ? 3 : 9);
+  const vz = dive ? -24 : up * (held('shift') ? 3 : 9); // R: dive (the controller tops out near 15 m/s down, stops in ~1 s)
   if (input.mode === 'assist') {
     const h = input.yaw, v = add(mul(fwdOf(h), fx), mul(rightOf(h), rx));
     return { v: mul(len(v) > 1 ? norm(v) : v, held('shift') ? 7 : 60), vz, heading: h, yawRate: yawKey * 1.8, cut, sprint, aim, fire: input.firing };
