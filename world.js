@@ -141,14 +141,34 @@ export function createWorld({ renderer, camera }) {
   const tmpS = new THREE.Vector3();
 
   // ---------------------------------------------------------------- city meshes
-  // buildings: procedural facades laid out in each building's OWN coordinates (per-instance size and
-  // seed): windows fit between corner pillars, floors start at the base, one style per building.
-  // Concrete, not plastic: matte, fine grain, rain streaks, panel joints, dirty base. Everything is
-  // anti-aliased with fwidth and fades to its average far away, so nothing shimmers or "z-fights".
+  // Window textures, one per facade style, each covering ONE window cell (one bay × one floor):
+  // R = glass, G = frame/mullions, B = sill. Mip-mapped, so the GPU filters them properly at any
+  // distance: no shimmer, no half-faded "ghost" windows.
+  // all four styles side by side in one atlas (one texture read per pixel)
+  const atlasC = document.createElement('canvas'); atlasC.width = 1024; atlasC.height = 256;
+  const atlasX = atlasC.getContext('2d'); atlasX.fillStyle = '#000'; atlasX.fillRect(0, 0, 1024, 256);
+  let tileN = 0;
+  function windowTex(draw) {
+    const ox = tileN++ * 256;
+    draw((col, x0, y0, x1, y1) => { atlasX.fillStyle = col; atlasX.fillRect(ox + x0 * 256, (1 - y1) * 256, (x1 - x0) * 256, (y1 - y0) * 256); });
+  }
+  const FRAME = '#00ff00', GLASS = '#ff0000', SILL = '#0000ff';
+  const WIN_TEX = {
+    punched: windowTex(r => { r(FRAME, 0.18, 0.27, 0.82, 0.87); r(GLASS, 0.215, 0.305, 0.785, 0.835); r(FRAME, 0.49, 0.305, 0.51, 0.835); r(SILL, 0.15, 0.2, 0.85, 0.27); }),
+    ribbon: windowTex(r => { r(FRAME, 0.0, 0.28, 1.0, 0.86); r(GLASS, 0.03, 0.31, 0.97, 0.83); r(FRAME, 0.485, 0.31, 0.515, 0.83); r(SILL, 0.0, 0.2, 1.0, 0.28); }),
+    curtain: windowTex(r => { r(FRAME, 0.0, 0.0, 1.0, 1.0); r(GLASS, 0.03, 0.08, 0.97, 0.97); r(SILL, 0.0, 0.0, 1.0, 0.06); }),
+    house: windowTex(r => { r(FRAME, 0.24, 0.3, 0.76, 0.84); r(GLASS, 0.27, 0.33, 0.73, 0.81); r(FRAME, 0.49, 0.33, 0.51, 0.81); r(FRAME, 0.27, 0.56, 0.73, 0.58); r(SILL, 0.21, 0.24, 0.79, 0.3); }),
+  };
+  const winAtlas = new THREE.CanvasTexture(atlasC);
+  winAtlas.anisotropy = 8; winAtlas.colorSpace = THREE.NoColorSpace; winAtlas.wrapS = winAtlas.wrapT = THREE.ClampToEdgeWrapping;
+  // buildings: facades laid out in each building's OWN coordinates (per-instance size and seed):
+  // windows fit between corner pillars, floors start at the base, one style per building; matte
+  // concrete with grain, rain streaks and a dirty base
   function windowed(params, house = false) {
     const m = std({ ...params, metalness: 0, roughness: 0.95, envMapIntensity: 0.25 }, sh => {
       WORLD_VARYINGS(sh);
       sh.uniforms.uNight = NIGHT;
+      sh.uniforms.tWin = { value: winAtlas };
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nattribute vec3 aSize; attribute float aSeed;\nvarying vec3 vLocal; varying vec3 vSize; varying float vSeed;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\n vLocal = position * aSize; vSize = aSize; vSeed = aSeed;');
@@ -156,6 +176,7 @@ export function createWorld({ renderer, camera }) {
         .replace('#include <common>', `#include <common>
   varying vec3 vLocal; varying vec3 vSize; varying float vSeed;
   uniform float uNight;
+  uniform sampler2D tWin; // atlas: punched | ribbon | curtain | house
   // a 1-D band [lo, hi] with edges softened by the pixel footprint w
   float band(float x, float lo, float hi, float w) { return smoothstep(lo - w, lo + w, x) * (1.0 - smoothstep(hi - w, hi + w, x)); }`)
         .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
@@ -173,36 +194,41 @@ export function createWorld({ renderer, camera }) {
             float cols = max(1.0, floor(usable / (HOUSE ? 2.8 : mix(1.8, 3.8, s1))));
             float top = vSize.y - (HOUSE ? 0.4 : 1.3);
             float floors = max(1.0, floor((top - ground) / fh));
-            float uu = (u - pillar) / (usable / cols), vv = (v - ground) / ((top - ground) / floors);
-            vec2 fw = vec2(fwidth(uu), fwidth(vv)) * 0.75;                   // pixel footprint in window cells
-            float detail = 1.0 - smoothstep(0.18, 0.45, max(fw.x, fw.y));   // 1 = close, 0 = too small to draw
-            vec2 f = fract(vec2(uu, vv));
-            float inside = band(uu, 0.0, cols, fw.x) * band(vv, 0.0, floors, fw.y);
-            float style = HOUSE ? 0.0 : s3;                                  // punched / ribbon / curtain wall
-            float wx = style < 0.4 ? 0.2 : style < 0.72 ? 0.035 : 0.025;
-            float wy0 = style < 0.72 ? 0.3 : 0.05, wy1 = style < 0.72 ? 0.84 : 0.96;
-            float sharp = band(f.x, wx, 1.0 - wx, fw.x) * band(f.y, wy0, wy1, fw.y);
-            float win = inside * mix((1.0 - 2.0 * wx) * (wy1 - wy0), sharp, detail);
-            float frame = inside * detail * (band(f.x, wx - 0.05, 1.0 - wx + 0.05, fw.x) * band(f.y, wy0 - 0.05, wy1 + 0.04, fw.y) - sharp);
+            vec2 cellUV = vec2((u - pillar) / (usable / cols), (v - ground) / ((top - ground) / floors));
+            // which cells have windows (the facade between the pillars, above the shops, below the parapet)
+            float inside = band(cellUV.x, 0.0, cols, fwidth(cellUV.x)) * band(cellUV.y, 0.0, floors, fwidth(cellUV.y));
+            float style = HOUSE ? -1.0 : s3;
+            float tile = style < 0.0 ? 3.0 : style < 0.4 ? 0.0 : style < 0.72 ? 1.0 : 2.0;
+            // explicit gradients from the continuous cell coordinates: correct mip level, no seams at the wraps
+            vec2 aUV = vec2((tile + clamp(fract(cellUV.x), 0.002, 0.998)) / 4.0, clamp(fract(cellUV.y), 0.002, 0.998));
+            vec4 w = textureGrad(tWin, aUV, dFdx(cellUV) * vec2(0.25, 1.0), dFdy(cellUV) * vec2(0.25, 1.0));
+            float glassM = w.r * inside, frameM = w.g * inside, sillM = w.b * inside;
+            // each window is lit or dark as a whole (decided per cell), fading to the average only when a
+            // whole window is smaller than ~2 pixels
             float side = xFace ? sign(vWNorm.x) : 2.0 * sign(vWNorm.z);
-            vec2 cell = vec2(floor(uu), floor(vv)) + vec2(vSeed * 173.0 + side * 31.0, side * 17.0);
-            float litP = 0.15 + 0.33 * uNight;                               // share of rooms with the lights on
-            float lit = mix(litP, step(1.0 - litP, h21(cell)), detail);
-            float broken = step(0.985, h21(cell * 1.7 + 3.1)) * detail;      // war zone: a few panes blown out
-            // concrete: fine grain (only up close), rain streaks under the windows, panel joints, dirty base
-            float grain = mix(0.5, vnoise(vWPos.xy * 3.0 + vWPos.zy * 3.0), detail);
+            vec2 cell = floor(cellUV) + vec2(vSeed * 173.0 + side * 31.0, side * 17.0);
+            float px = 1.0 / max(max(fwidth(cellUV.x), fwidth(cellUV.y)), 1e-4);  // pixels per window
+            float litP = 0.15 + 0.33 * uNight;
+            float lit = mix(litP, step(1.0 - litP, h21(cell)), smoothstep(1.5, 4.0, px));
+            float broken = step(0.985, h21(cell * 1.7 + 3.1)) * smoothstep(1.5, 4.0, px);
+            float blinds = h21(cell + 5.3);                                   // some windows have their blinds down
+            // concrete
+            float grain = vnoise(vWPos.xy * 3.0 + vWPos.zy * 3.0);
             float streak = vnoise(vec2(u * 0.9 + vSeed * 40.0, v * 0.07));
-            float joints = inside * detail * (1.0 - band(f.x, 0.012, 0.988, fw.x)) * step(0.72, style);
             float base = 1.0 - smoothstep(0.0, 1.6, v);
-            diffuseColor.rgb *= 0.9 + 0.1 * grain;
-            diffuseColor.rgb *= 1.0 - 0.14 * smoothstep(0.35, 0.8, streak) - 0.25 * base - 0.2 * joints - 0.35 * max(frame, 0.0);
-            float cornice = band(v, top, top + 0.25, fwidth(v));             // band under the parapet
-            diffuseColor.rgb *= 1.0 - cornice * 0.3;
+            diffuseColor.rgb *= 0.92 + 0.08 * grain;
+            diffuseColor.rgb *= 1.0 - 0.14 * smoothstep(0.35, 0.8, streak) - 0.25 * base;
+            diffuseColor.rgb *= 1.0 - 0.3 * band(v, top, top + 0.25, fwidth(v)); // cornice line
+            // frames (dark anodised or white-painted per building), sills, glass
+            vec3 frameC = s2 < 0.5 ? vec3(0.07, 0.075, 0.08) : vec3(0.62, 0.61, 0.58);
+            diffuseColor.rgb = mix(diffuseColor.rgb, frameC, frameM);
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.18, sillM);
             vec3 glass = mix(vec3(0.045, 0.05, 0.055), vec3(0.1, 0.105, 0.11), s2);
-            diffuseColor.rgb = mix(diffuseColor.rgb, broken > 0.5 ? vec3(0.015) : glass, win * 0.92);
-            roughnessFactor = mix(roughnessFactor, 0.3, win * (1.0 - broken));
-            metalnessFactor = mix(metalnessFactor, 0.15, win * (1.0 - broken));
-            totalEmissiveRadiance += win * lit * (1.0 - broken) * vec3(1.0, 0.72, 0.38) * (0.35 + 1.8 * uNight);
+            glass = mix(glass, vec3(0.32, 0.3, 0.27), step(0.82, blinds) * 0.6);
+            diffuseColor.rgb = mix(diffuseColor.rgb, broken > 0.5 ? vec3(0.015) : glass, glassM);
+            roughnessFactor = mix(roughnessFactor, 0.3, glassM * (1.0 - broken));
+            metalnessFactor = mix(metalnessFactor, 0.15, glassM * (1.0 - broken));
+            totalEmissiveRadiance += glassM * lit * (1.0 - broken) * vec3(1.0, 0.72, 0.38) * (0.35 + 1.8 * uNight);
             if (HOUSE) {                                                     // a front door on one face
               float door = band(u, faceW * 0.5 - 0.55, faceW * 0.5 + 0.55, fwidth(u)) * step(v, 2.2) * step(0.5, fract(vSeed * 3.0 + side * 0.25));
               diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.24, 0.15, 0.09), door);

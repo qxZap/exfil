@@ -34,11 +34,14 @@ const radio = new RadioNet(audio, (from, text, df) => {
   radioLines.push({ text }); if (radioLines.length > 6) radioLines.shift();
   $('radioLog').innerHTML = radioLines.map(l => `<div>${l.text}</div>`).join('');
 });
-$('audioBtn').onclick = () => { if (!audio.ctx) { audio.start(); $('audioBtn').textContent = 'radio: on'; } else { audio.muted = !audio.muted; $('audioBtn').textContent = `radio: ${audio.muted ? 'off' : 'on'}`; } };
+function startRadio() { audio.start(); $('audioBtn').textContent = 'radio: on'; $('soundHint').style.display = 'none'; }
+let swallowClick = false;
+addEventListener('pointerdown', e => { if (!audio.ctx) { startRadio(); swallowClick = e.target === canvas || e.target === $('audioBtn'); } }, true);
+$('audioBtn').onclick = () => { if (swallowClick) return; audio.muted = !audio.muted; $('audioBtn').textContent = `radio: ${audio.muted ? 'off' : 'on'}`; };
 
 // ---------------------------------------------------------------- live state
 let game = null, key = null, snap = null, building = false;
-window.monitor = { get key() { return key; }, get snap() { return snap; } };
+window.monitor = { get key() { return key; }, get snap() { return snap; }, get audio() { return audio; }, get history() { return history; } };
 const history = new Map(); // hunter index -> [{ t, text, mode }]
 const target = new Map();  // drone -> { p, q } latest pose from the feed
 const es = new EventSource('/stream');
@@ -86,12 +89,14 @@ $('shadowsBtn').onclick = () => { shadows = !shadows; for (const l of world.csm.
 addEventListener('keydown', e => { if (e.key === 'Escape') focus = null; });
 let tiles = [];
 canvas.addEventListener('click', e => {
+  if (swallowClick) { swallowClick = false; return; } // that click just turned the radio on
   if (focus !== null) { focus = null; return; }
   const t = tiles.find(t => e.clientX >= t.x && e.clientX < t.x + t.w && e.clientY - BAR >= t.y && e.clientY - BAR < t.y + t.h);
   if (t) focus = t.i;
 });
 const MODE_ORDER = { CHASE: 0, CONFIRM: 1, SEARCH: 2, LANDING: 3, TRANSIT: 4, DOWN: 5 };
 const MODE_COL = { CHASE: '#ff4a4a', CONFIRM: '#b07cff', SEARCH: '#ffb020', TRANSIT: '#9dffc6', LANDING: '#8f9aa6', DOWN: '#555' };
+const boardW = () => Math.min(360, Math.max(260, W * 0.24));
 function pickTiles() {
   if (focus !== null) { const panel = Math.min(420, W * 0.34); return [{ i: focus, x: 0, y: 0, w: W - panel, h: H, big: true }]; }
   const P = game.player.pos;
@@ -99,7 +104,7 @@ function pickTiles() {
     const A = game.hunters[a], B = game.hunters[b];
     return (MODE_ORDER[A.mode] ?? 9) - (MODE_ORDER[B.mode] ?? 9) || Math.hypot(A.d.pos.x - P.x, A.d.pos.z - P.z) - Math.hypot(B.d.pos.x - P.x, B.d.pos.z - P.z);
   }).slice(0, layout);
-  const n = order.length, cols = Math.ceil(Math.sqrt(n * W / H / 1.6)), rows = Math.ceil(n / cols), tw = W / cols, th = H / rows;
+  const GW = W - boardW(), n = order.length, cols = Math.ceil(Math.sqrt(n * GW / H / 1.6)), rows = Math.ceil(n / cols), tw = GW / cols, th = H / rows;
   return order.map((i, k) => ({ i, x: (k % cols) * tw, y: Math.floor(k / cols) * th, w: tw, h: th }));
 }
 
@@ -146,6 +151,7 @@ function frame(now) {
   // overlays
   g2.clearRect(0, 0, W, H);
   for (const tile of tiles) { overlay(tile, now / 1000); scope(tile); }
+  if (focus === null) board();
   if (focus !== null) panel(focus, now / 1000);
 }
 requestAnimationFrame(frame);
@@ -215,9 +221,15 @@ function overlay(tile, T) {
   const spd = Math.hypot(x.vel[0], x.vel[1], x.vel[2]);
   g2.fillText(`${Math.round(spd * 3.6)} km/h · ${Math.round(h.d.pos.y)} m · bat ${Math.round(x.soc * 100)}% · hull ${x.hull}%`, tile.x + tile.w - 8, tile.y + fs + 2);
   g2.textAlign = 'left';
-  if (!big) {
-    g2.fillStyle = 'rgba(0,0,0,.55)'; g2.fillRect(tile.x, tile.y + tile.h - fs - 10, tile.w, fs + 10);
-    g2.fillStyle = '#e8edf2'; g2.fillText(ellipsize(h.thought, tile.w - 16, fs), tile.x + 8, tile.y + tile.h - 7);
+  if (!big) { // decision feed: the last few things it decided, newest at the bottom
+    const list = (history.get(tile.i) ?? []).slice(-(tile.h > 300 ? 4 : tile.h > 190 ? 3 : 2)), lh = fs + 4;
+    const boxH = list.length * lh + 8, y0 = tile.y + tile.h - boxH;
+    g2.fillStyle = 'rgba(0,0,0,.62)'; g2.fillRect(tile.x, y0, tile.w, boxH);
+    list.forEach((d, k) => {
+      const newest = k === list.length - 1, ts = `${Math.floor(d.t / 60)}:${String(Math.floor(d.t % 60)).padStart(2, '0')}`;
+      g2.fillStyle = newest ? '#ffffff' : 'rgba(200,210,220,.62)'; g2.font = `${newest ? 'bold ' : ''}${fs}px ui-monospace, Consolas`;
+      g2.fillText(ellipsize(`${ts} ${d.text}`, tile.w - (Math.min(tile.w, tile.h) * 0.34 + 24), fs), tile.x + 8, y0 + 4 + (k + 1) * lh - 4);
+    });
   }
   g2.strokeStyle = 'rgba(255,255,255,.08)'; g2.strokeRect(tile.x + 0.5, tile.y + 0.5, tile.w - 1, tile.h - 1);
   g2.restore();
@@ -260,6 +272,33 @@ function panel(i, T) {
   }
 }
 function wrap(t, w, fs) { const n = Math.floor(w / (fs * 0.6)), out = []; for (let k = 0; k < t.length; k += n) out.push((k ? '         ' : '') + t.slice(k, k + n)); return out; }
+
+// ---------------------------------------------------------------- decision board: every hunter, what it's deciding
+function board() {
+  const bw = boardW(), bx = W - bw;
+  g2.fillStyle = 'rgba(8,11,14,.94)'; g2.fillRect(bx, 0, bw, H);
+  g2.fillStyle = '#9dffc6'; g2.font = 'bold 13px ui-monospace, Consolas'; g2.fillText('DECISIONS · every hunter', bx + 12, 20);
+  const order = game.hunters.map((h, i) => i).sort((a, b) => (MODE_ORDER[game.hunters[a].mode] ?? 9) - (MODE_ORDER[game.hunters[b].mode] ?? 9) || a - b);
+  let y = 40;
+  for (const i of order) {
+    const h = game.hunters[i], list = history.get(i) ?? [], last = list[list.length - 1];
+    if (y > H - 30) { g2.fillStyle = 'rgba(200,210,220,.5)'; g2.font = '11px ui-monospace, Consolas'; g2.fillText(`+ ${order.length - order.indexOf(i)} more`, bx + 12, H - 10); break; }
+    const col = h.x?.alive === false ? '#666' : MODE_COL[h.mode] ?? '#9dffc6', ago = last ? Math.max(0, Math.round(game.time - last.t)) : 0;
+    g2.fillStyle = col; g2.font = 'bold 12px ui-monospace, Consolas';
+    g2.fillText(`${h.d.name.toUpperCase()} · ${h.mode}${h.x?.lead ? ' · LEAD' : ''}`, bx + 12, y);
+    g2.fillStyle = 'rgba(200,210,220,.55)'; g2.font = '10px ui-monospace, Consolas'; g2.textAlign = 'right'; g2.fillText(`${ago}s`, W - 10, y); g2.textAlign = 'left';
+    g2.fillStyle = '#dfe6ec'; g2.font = '11px ui-monospace, Consolas';
+    const lines = wrapWords(h.thought ?? '', bw - 26, 11).slice(0, 2);
+    lines.forEach((l, k) => g2.fillText(l, bx + 12, y + 14 + k * 13));
+    y += 18 + lines.length * 13 + 6;
+    g2.strokeStyle = 'rgba(255,255,255,.06)'; g2.beginPath(); g2.moveTo(bx + 8, y - 8); g2.lineTo(W - 8, y - 8); g2.stroke();
+  }
+}
+function wrapWords(t, w, fs) {
+  const n = Math.floor(w / (fs * 0.6)), out = []; let cur = '';
+  for (const word of t.split(' ')) { if ((cur + ' ' + word).trim().length > n) { out.push(cur.trim()); cur = word; } else cur += ' ' + word; }
+  if (cur.trim()) out.push(cur.trim()); return out;
+}
 
 // ---------------------------------------------------------------- each hunter's own radar scope
 // Heading-up, centred on the hunter: its radar range, where its camera points, its track on you

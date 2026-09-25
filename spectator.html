@@ -18,6 +18,8 @@
   canvas#view, canvas#hud { position: fixed; left: 0; top: 44px; }
   canvas#hud { pointer-events: none; z-index: 2; }
   #wait { position: fixed; inset: 44px 0 0 0; display: grid; place-items: center; color: var(--dim); font-size: 15px; text-align: center; z-index: 1; }
+  #soundHint { position: fixed; left: 50%; top: 58px; transform: translateX(-50%); z-index: 4; background: var(--hud); color: #06140c; font-weight: 700; padding: 8px 16px; border-radius: 8px; pointer-events: none; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
   #radioLog { position: fixed; left: 10px; bottom: 10px; width: 420px; z-index: 3; pointer-events: none; }
   #radioLog div { background: rgba(10,13,17,.75); border-left: 3px solid var(--bad); color: #e9c9c9; font-style: italic; padding: 3px 8px; margin-top: 3px; border-radius: 4px; }
 </style>
@@ -37,13 +39,14 @@
   <span class="grow"></span>
   <span style="color:var(--dim)">views</span>
   <span id="layouts"><button data-n="4">4</button> <button data-n="9" class="sel">9</button> <button data-n="16">16</button> <button data-n="27">27</button></span>
-  <button id="audioBtn">radio: click to enable</button>
+  <button id="audioBtn">radio: off</button>
   <button id="shadowsBtn">shadows: off</button>
   <span style="color:var(--dim)">click a view to expand · Esc back</span>
 </div>
 <canvas id="view"></canvas>
 <canvas id="hud"></canvas>
 <div id="radioLog"></div>
+<div id="soundHint">🔊 Click anywhere to hear the hunters' radio</div>
 <div id="wait">Waiting for a game…<br><br>Start one at <b>http://localhost:8090</b> (on the machine running the server).<br>Every hunter's camera and what it's deciding will appear here.</div>
 <script type="module" src="./spectator.js"></script>
 </body>
