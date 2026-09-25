@@ -1,0 +1,16 @@
+{
+  "name": "exfil",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Drone escape game: steal the data, get 700 m clear of the hunter drones. Rapier physics, per-rotor thrust, battery, damage.",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "node serve.mjs",
+    "test": "node test-sim.mjs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.20.0",
+    "three": "^0.186.1"
+  }
+}
