@@ -108,7 +108,45 @@ function buildCity(world, r) {
       });
     }
   }
-  return { buildings, trees, fires };
+  // rooftop clutter and street furniture: real colliders, because this is where drones fly.
+  // A separate random stream, so adding props never reshuffles the city itself.
+  const r2 = rng(buildings.length * 7919 + trees.length);
+  const props = [], lights = [];
+  const solid = desc => (props.last = world.createCollider(desc.setCollisionGroups(grp(WORLD, 0xffff))));
+  for (const b of buildings) {
+    if (b.kind !== 'tower' && b.kind !== 'block') continue;
+    const roof = b.y + b.hy, inset = (a, m) => (r2() * 2 - 1) * Math.max(0, a - m);
+    const nAC = b.kind === 'tower' ? 1 + Math.floor(r2() * 3) : Math.floor(r2() * 3);
+    for (let k = 0; k < nAC; k++) {
+      const x = b.x + inset(b.hx, 3), z = b.z + inset(b.hz, 3);
+      solid(RAPIER.ColliderDesc.cuboid(1.1, 0.7, 0.8).setTranslation(x, roof + 0.7, z));
+      props.push({ type: 'ac', x, y: roof + 0.7, z, col: props.last });
+    }
+    if (r2() < (b.kind === 'tower' ? 0.45 : 0.2)) {
+      const x = b.x + inset(b.hx, 4), z = b.z + inset(b.hz, 4);
+      solid(RAPIER.ColliderDesc.cylinder(2.2, 2).setTranslation(x, roof + 3.2, z)); // tank on short legs
+      props.push({ type: 'tank', x, y: roof + 3.2, z, col: props.last });
+    }
+    if (b.kind === 'tower' && r2() < 0.35) {
+      const h = 10 + r2() * 18, x = b.x + inset(b.hx, 2), z = b.z + inset(b.hz, 2);
+      solid(RAPIER.ColliderDesc.cylinder(h / 2, 0.18).setTranslation(x, roof + h / 2, z));
+      props.push({ type: 'mast', x, y: roof + h / 2, z, h, col: props.last });
+    }
+  }
+  // street lights: one side of every road, every 60 m, clear of the junctions
+  const n2 = Math.round(2 * CITY.half / CITY.pitch);
+  for (let k = 0; k <= n2; k++) {
+    const line = -CITY.half + k * CITY.pitch;
+    for (let s = -CITY.half + 30; s < CITY.half; s += 60) {
+      for (const axis of ['x', 'z']) {
+        const side = (k + Math.round(s / 60)) % 2 ? 1 : -1, off = side * (CITY.road / 2 - 0.6);
+        const x = axis === 'x' ? s : line + off, z = axis === 'x' ? line + off : s;
+        solid(RAPIER.ColliderDesc.cylinder(4, 0.12).setTranslation(x, 4, z));
+        lights.push({ x, z, axis, side });
+      }
+    }
+  }
+  return { buildings, trees, fires, props, lights };
 }
 
 // Cars: follow the road grid, wrap at the city edge. Pure functions of time.
@@ -686,6 +724,12 @@ export class Game {
     const tower = towers[0]; // tall and central
     const roof = tower.y + tower.hy;
     this.serverTower = tower;
+    // clear a landing pad around the server: no rooftop clutter where you take off
+    this.city.props = this.city.props.filter(p => {
+      const onPad = Math.abs(p.x - tower.x) < 9 && Math.abs(p.z - tower.z) < 9 && p.y > roof - 1;
+      if (onPad) this.world.removeCollider(p.col, false);
+      return !onPad;
+    });
     this.world.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 0.9, 0.35).setTranslation(tower.x, roof + 0.9, tower.z).setCollisionGroups(grp(WORLD, 0xffff)));
     this.server = v3(tower.x, roof + 0.9, tower.z);
     this.player = new Drone(this.world, { pos: v3(tower.x + 2.5, roof + 0.3, tower.z), team: 'player', name: 'You' });

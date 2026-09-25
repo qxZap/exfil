@@ -47,6 +47,18 @@ You win by getting 700 m from every hunter, or by shooting them all down. If you
 
 While you're flying, the game takes every key, so browser shortcuts like Ctrl+S don't fire. Nothing is bound to Ctrl, because no web page can block Ctrl+W.
 
+## Look and feel
+
+- **Sky and light:** a physically based sky (Rayleigh/Mie scattering) with a low sun through haze. It is also baked into an environment map, so glass and metal reflect it. ACES tone mapping and distance haze.
+- **Shadows:** four cascades, sharp at your drone and still present 900 m out.
+- **Procedural facades from world position** (no textures): floors and slab lines, window grids that vary per building (ribbon glass to punched windows), reflective glass, lit rooms, blown-out panes, weathering, gravel roofs, and shopfronts with awnings at street level.
+- **Streets:** worn asphalt, sidewalks, dashed centre lines, and patchy ground with scorch marks.
+- **Rooftop clutter:** AC units, water towers and masts with blinking aviation lights. These are real colliders.
+- **Street lights:** real colliders every 60 m.
+- **Cars:** 360 of them, in 7 models (sedan, SUV, van, truck, delivery, taxi, the odd police car), driving the grid.
+- **Pedestrians:** about 520 people walk the sidewalks around you or stand about. When a drone comes in low or rounds hit near the street, they run away from it, then calm down.
+- **Performance:** everything repeated is GPU-instanced. The whole city is about 850 draw calls with 27 hunters, at 220+ FPS on an RTX 4080.
+
 ## The drone
 
 It's a 2.0 kg X-quad. Each part is a collider with its own mass: frame, arms, a 0.7 kg battery slung under the frame, the gun and camera pod on the nose, and four motors with props.
@@ -125,11 +137,22 @@ The autopilot player is a simple flee-and-stay-low script, so a human who uses t
 - A "return to base" objective as an alternative way to win.
 - Cars only collide at street level (below 3 m) and are simplified.
 
+## Credits
+
+3D models are in `assets/models`, with the full list in [`assets/models/CREDITS.md`](assets/models/CREDITS.md):
+
+- "Drone" by NateGazzard (https://poly.pizza/m/DNbUoMtG3H), licensed under CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/). Modified: rotor nodes re-pivoted to their hub centres.
+- Helicopter by kazuma (CC0), modified so the main rotor is a separate node.
+- Cars, trees, street lights and water towers by Kenney (www.kenney.nl), CC0.
+
 ## Files
 
 | | |
 |---|---|
 | [`sim.js`](sim.js) | Everything that matters: city, weather, helicopters, drone physics, flight controller, sensors, hunter brain, ballistics, damage |
-| [`index.html`](index.html) | Three.js rendering (instanced city with procedural windows), HUD, radar scope, input |
+| [`index.html`](index.html) | Page, HUD layout, menus |
+| [`client.js`](client.js) | Rendering (sky, cascaded shadows, procedural facade shaders, instancing), HUD, radar scope, input |
+| [`models.js`](models.js) | Loads the glTF models; bakes them for instancing; live clones with spinning rotors |
+| [`people.js`](people.js) | The pedestrian crowd |
 | [`test-sim.mjs`](test-sim.mjs) | Headless test bench and Monte Carlo |
 | [`serve.mjs`](serve.mjs) | Zero-dependency static server |
