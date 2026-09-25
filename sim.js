@@ -151,8 +151,8 @@ function buildCity(world, r) {
 
 // Cars: follow the road grid, wrap at the city edge. Pure functions of time.
 // Traffic: every road has a lane each way; cars in a lane share the lane's speed and keep their
-// spacing, so nobody drives through anybody. ~14,000 cars on 136 lanes of 4 km.
-function makeCars(r, count = 14400) {
+// spacing, so nobody drives through anybody. ~4,800 cars on 136 lanes of 4 km.
+function makeCars(r, count = 4800) {
   const r2 = rng(Math.floor(r() * 1e9)), n = Math.round(2 * CITY.half / CITY.pitch), cars = [];
   const lanes = [];
   for (let k = 0; k <= n; k++) for (const axis of ['x', 'z']) for (const dir of [1, -1]) lanes.push({ axis, line: -CITY.half + CITY.pitch * k, dir, speed: 8 + r2() * 7 });
