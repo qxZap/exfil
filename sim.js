@@ -466,7 +466,7 @@ export class Sensors {
         this.tracks.set(tg, { pos, vel, t, src, err });
       };
       if (t >= this.next.radar && d < this.range.radar * dmg) {
-        const agl = tp.y; // clutter: low targets hide against the ground and buildings
+        const agl = tg.agl ?? tp.y; // clutter: low over whatever is below (street or roof) hides you
         const p = clamp((agl - 4) / 30, 0.12, 1) * (1 - (d / (this.range.radar * dmg)) ** 4);
         if (r() < p && this.los(me, tp)) seen('RADAR', d * 0.012);
       }
@@ -509,6 +509,11 @@ export class Navigator {
   // returns a flight-controller command
   steer(goal, speed, t, { helis = [], heliObs = [], minAgl = 6, heading = null, others = [], sprint = false } = {}) {
     const d = this.d, p = d.pos, v = d.vel, sp = len(v);
+    // a goal inside a building (a slot, a guess) can't be reached: go for the roof above it
+    if (d.world.castRay(new RAPIER.Ray(goal, v3(0, 1, 0)), 600, true, undefined, SEE_SOLID)?.timeOfImpact === 0) {
+      const top = d.world.castRay(new RAPIER.Ray(v3(goal.x, 600, goal.z), v3(0, -1, 0)), 600, true, undefined, SEE_SOLID);
+      if (top) goal = v3(goal.x, 600 - top.timeOfImpact + 8, goal.z);
+    }
     const to = sub(goal, p), gd = len(to), want = norm(to);
     const range = clamp(sp * 3 + 15, 25, 120);
     // plan with the braking the airframe reliably achieves (measured ~8.6 m/s²), not the theoretical 17
@@ -519,14 +524,24 @@ export class Navigator {
       ...heliObs.filter(o => dist(o.p, p) < 200).map(o => ({ ...o, f: add(o.p, mul(o.v, 1.5)), r: 25 })),
     ];
     if (!this.scan || t - this.scanAt > 1 / 15) { // think at 15 Hz
-      const baseH = headingOf(flat(want).x || flat(want).z ? want : fwdOf(d.heading));
+      // a wall between me and the goal, wider than I can see round: pick a side and follow it
+      // round (bug algorithm), keeping that side so I don't dither in front of the wall
+      const reach = Math.min(gd - 2, range), rotH = (u, a) => v3(u.x * Math.cos(a) + u.z * Math.sin(a), u.y, -u.x * Math.sin(a) + u.z * Math.cos(a));
+      const walled = reach > 5 && this.clearance(p, want, reach) < reach - 1;
+      if (walled && (!this.detour || this.detour.off && t - this.detour.off > 8)) {
+        this.detour = { side: this.clearance(p, rotH(want, 1.2), 150) >= this.clearance(p, rotH(want, -1.2), 150) ? 1 : -1, t };
+      } else if (walled && this.detour.off) this.detour.off = 0;
+      else if (walled && t - this.detour.t > 25) this.detour = { side: -this.detour.side, t }; // that way was a dead end
+      else if (!walled && this.detour && !this.detour.off) this.detour.off = t;
+      const aim = this.detour && !this.detour.off ? norm(rotH(want, this.detour.side * 1.2)) : want;
+      const baseH = headingOf(flat(aim).x || flat(aim).z ? aim : fwdOf(d.heading));
       let best = null;
       for (const c of NAV_DIRS) {
         const h = baseH + c.yaw, cp = Math.cos(c.pitch);
         const dir = v3(Math.sin(h) * cp, Math.sin(c.pitch), Math.cos(h) * cp);
         const clear = this.clearance(p, dir, range);
         const wash = this.washAlong(p, dir, Math.min(clear, 60), helis);
-        let score = dot(dir, want) * Math.min(clear, gd) + 0.12 * clear
+        let score = dot(dir, aim) * Math.min(clear, gd) + 0.12 * clear
           + (this.last ? 3 * dot(dir, this.last) : 0) - wash * 1.5 - (clear < 8 ? 60 : 0);
         if (p.y < minAgl + 2 && dir.y < 0) score -= 40; // don't dive into the street
         for (const o of near) for (const q of [o.p, o.f]) { // don't fly through a wingman (now or soon)

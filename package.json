@@ -7,7 +7,8 @@
   "license": "UNLICENSED",
   "scripts": {
     "start": "node serve.mjs",
-    "test": "node test-sim.mjs"
+    "test": "node test-sim.mjs",
+    "audit": "node audit-sight.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.20.0",

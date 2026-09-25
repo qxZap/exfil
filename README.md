@@ -159,6 +159,9 @@ They fly as a swarm:
 
 `npm test` runs the same simulation headless (`SEEDS=8 npm test` for more games):
 
+`npm run audit` checks the hunters' eyes and pathing: no camera/radar sighting through a wall (independent multi-ray check), no hunter stuck against a building, a hunter gets round a 240 m tower to regain sight, and a player hidden behind a tower stays unseen.
+
+
 ```
 PASS  hover 60 s in gusty wind                  alt error ≤ 0.72 m, tilt ≤ 4.9°, 216 W
 PASS  hover endurance ≥ 20 min                  29.9 min of hover left after the test
