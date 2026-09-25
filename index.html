@@ -100,12 +100,11 @@
     <h1>EXFIL</h1>
     <p>You're a quadcopter sitting on the roof of the tallest tower downtown. You've just pulled the data off the server. Hunter drones have been scrambled toward this roof. They know where the server is, not where you are.</p>
     <p><b>Get 700 m clear of every hunter.</b> Break line of sight, fly low through the streets, use the helicopters' downwash, or shoot back. Every rotor, the battery and the hull take real damage.</p>
-    <div class="lab">Hunter speed vs you</div>
+    <div class="lab">Difficulty: how many hunters, and how fast vs you</div>
     <div class="choices" id="diff">
-      <button data-v="easy">Easy · same speed</button><button data-v="normal" class="sel">Normal · +10%</button><button data-v="hard">Hard · +20%</button><button data-v="brutal">Brutal · +25%</button>
+      <button data-v="easy">Easy · 3 hunters · same speed</button><button data-v="normal" class="sel">Normal · 9 · +10%</button><button data-v="hard">Hard · 18 · +20%</button><button data-v="brutal">Brutal · 27 · +25%</button>
     </div>
-    <div class="lab">Hunters</div>
-    <div class="choices" id="count"><button data-v="1" class="sel">1</button><button data-v="2">2</button><button data-v="3">3</button></div>
+    <p style="font-size:12px">They share one data link: when one of them sees you, they all know where you are.</p>
     <div class="keys">
       <kbd>Mouse</kbd><span>look / aim (click to capture) · hold left button to fire</span>
       <kbd>W A S D</kbd><span>tilt: tap for a little, hold for more · <kbd>Shift</kbd> gentle</span>
@@ -307,7 +306,7 @@ const sparkMat = new THREE.SpriteMaterial({ color: 0xffd27a, blending: THREE.Add
 function spark(p, size = 1) { const s = new THREE.Sprite(sparkMat.clone()); s.position.set(p.x, p.y, p.z); s.scale.setScalar(size); s.userData.t = 0; scene.add(s); sparks.push(s); }
 
 // ---------------------------------------------------------------- game state
-let game, droneMeshes = [], settings = { difficulty: 'normal', hunters: 1, seed: 0 }, running = false;
+let game, droneMeshes = [], settings = { difficulty: 'normal', seed: 0 }, running = false;
 const input = { keys: new Set(), yaw: 0, pitch: -0.12, firing: false, cam: 'chase', intel: false, mode: 'angle', stick: { fwd: 0, right: 0 } };
 const MODES = ['angle', 'acro', 'assist'];
 
@@ -315,7 +314,7 @@ async function start(seed) {
   $('loading').style.display = 'grid';
   await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));
   settings.seed = seed ?? settings.seed ?? 1;
-  game = await Game.create({ seed: settings.seed, difficulty: settings.difficulty, hunters: settings.hunters });
+  game = await Game.create({ seed: settings.seed, difficulty: settings.difficulty });
   buildCityMeshes(game);
   for (const m of droneMeshes) scene.remove(m);
   droneMeshes = game.drones.map(d => { const m = d === game.player ? droneMesh(0xe7ecef, 0x46e08a) : droneMesh(0x2a2d31, 0xff3030); scene.add(m); return m; });
@@ -331,7 +330,7 @@ async function start(seed) {
 document.querySelectorAll('.choices').forEach(box => box.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   box.querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b));
-  if (box.id === 'diff') settings.difficulty = b.dataset.v; else settings.hunters = +b.dataset.v;
+  settings.difficulty = b.dataset.v;
 }));
 $('start').onclick = () => start(1 + Math.floor(Math.random() * 1e6));
 $('again').onclick = () => start(settings.seed);
@@ -427,7 +426,8 @@ function hud() {
     const k = game.playerSensors.tracks.get(H.d);
     if (k && H.d.alive) { const d = dist(k.pos, P.pos); if (!best || d < best.d) best = { d, age: t - k.t, src: k.src }; }
   }
-  $('hDist').textContent = best ? `${Math.round(best.d)} m${best.age > 1.2 ? ' ?' : ''}` : 'unknown';
+  const alive = game.hunters.filter(H => H.d.alive).length;
+  $('hDist').textContent = (best ? `${Math.round(best.d)} m${best.age > 1.2 ? ' ?' : ''}` : 'unknown') + ` · ${alive} up`;
   $('bar').firstElementChild.style.width = `${Math.min(100, (best?.d ?? 0) / ESCAPE_DIST * 100)}%`;
   $('contact').textContent = best ? (best.age < 1.2 ? `${best.src} now` : `${best.src} ${Math.round(best.age)} s ago`) : 'none';
   $('clock').textContent = `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
@@ -563,7 +563,7 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // a city behind the menu
-(async () => { game = await Game.create({ seed: 1, difficulty: 'normal', hunters: 1 }); buildCityMeshes(game);
+(async () => { game = await Game.create({ seed: 1, difficulty: 'easy' }); buildCityMeshes(game);
   droneMeshes = game.drones.map(d => { const m = d === game.player ? droneMesh(0xe7ecef, 0x46e08a) : droneMesh(0x2a2d31, 0xff3030); scene.add(m); return m; });
   input.yaw = game.player.heading + 0.6; input.pitch = -0.25; })();
 // controls panel: on by default, H toggles, remembered per browser

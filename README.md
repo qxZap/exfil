@@ -30,14 +30,16 @@ npm start          # → http://localhost:8080
 - **ACRO**: the sticks set *rotation rates* (up to 260°/s), with no self-levelling and manual throttle around hover. Barrel rolls, flips, inverted dives: a full roll costs about 11 m of altitude.
 - **ASSIST**: GPS-style. The sticks set velocity, and it brakes to a hover when you let go. The hunters fly this way.
 
-Choose a difficulty and 1–3 hunters in the menu:
+Choose a difficulty in the menu:
 
-| Difficulty | Hunter speed | Radar | Camera | Gun spread |
-|---|---|---|---|---|
-| Easy | same as you | 330 m | 280 m | 1.3° |
-| Normal | +10% | 400 m | 330 m | 0.95° |
-| Hard | +20% | 460 m | 380 m | 0.7° |
-| Brutal | +25% | 520 m | 420 m | 0.5° |
+| Difficulty | Hunters | Hunter speed | Radar | Camera | Gun spread |
+|---|---|---|---|---|---|
+| Easy | 3 | same as you | 330 m | 280 m | 1.3° |
+| Normal | 9 | +10% | 400 m | 330 m | 0.95° |
+| Hard | 18 | +20% | 460 m | 380 m | 0.7° |
+| Brutal | 27 | +25% | 520 m | 420 m | 0.5° |
+
+They scramble from all around the tower, 350–650 m out.
 
 You win by getting 700 m from every hunter, or by shooting them all down. If your drone can't fly any more (a rotor is gone, too little thrust left, the battery is dead, or the hull is destroyed), you're **downed**. The hunters then fly in to confirm, and you lose when one is within 8 m.
 
@@ -76,16 +78,20 @@ It's a 2.0 kg X-quad. Each part is a collider with its own mass: frame, arms, a 
 
 Your HUD shows only what *your* sensors know, including a heading-up radar scope. A radar warning receiver tells you when a hunter has you (**RADAR TRACK**, **OPTICAL LOCK**, **HEARD**, **UNDER FIRE**).
 
-## The hunter's brain
+## The hunters' brains
 
-- **TRANSIT:** it was told where the server is, not where you are. It flies there at altitude.
-- **CONFIRM:** once you're downed, every hunter flies in, low and slow, to within 8 m of where you fell.
-- **CHASE:** once a sensor has you, it intercepts at the point where you'll be. Close in, it holds a firing standoff about 70 m out and 18 m above. It fires in bursts using a lead solution (your velocity, its own velocity, bullet drop).
-- **SEARCH:** when it loses you, it climbs to at least 140 m to look down over the rooftops, flies to where you'd be if you'd kept going, and spirals outward.
+They fly as a swarm:
+
+- **Shared data link:** when any hunter's sensors have you, all of them know where you are.
+- **TRANSIT:** they were told where the server is, not where you are, so each flies to its own slot around the roof.
+- **CHASE:** they intercept at the point where you'll be. Close in, each takes its **own slot** around you (spread by the golden angle over three rings and several heights), so the swarm surrounds you instead of queueing. They fire in bursts using a lead solution (your velocity, their own, bullet drop).
+- **SEARCH:** when the link loses you, they climb to at least 140 m to look down over the rooftops, go to where you'd be if you'd kept going, and **fan out** in expanding circles at different heights.
+- **CONFIRM:** once you're downed, the *nearest* hunter flies in, low and slow, to within 8 m. The rest hold in a stack above the rooftops.
 - **Always:**
-  - It sweeps its body along about 60 3D directions to find a path that's clear.
-  - Helicopter downwash columns count as obstacles.
-  - Its speed is capped by its stopping distance, including the time it takes to tilt back, along both its chosen path and its actual momentum.
+  - **Clearance:** each hunter sweeps its body along about 60 3D directions to find a clear path. Helicopter downwash counts as an obstacle, and so do wingmen: where they are now *and* where they'll be in 0.8 s.
+  - **Personal space:** each keeps its distance from wingmen, earlier when closing fast, and never gets pushed into a wall by it.
+  - **Friendly fire:** they hold fire when a wingman is in the line of fire.
+  - **Speed:** capped by stopping distance, planned with the braking the airframe really achieves (~8.6 m/s²), along both the chosen path and the actual momentum.
 
 ## Tests
 
@@ -104,7 +110,7 @@ PASS  hunter finds + hits a sitting target      first hit at 18.4 s
 PASS  lost track -> climbs and searches         climbed to 185 m to look down
 PASS  downed (rotor shot off) -> hunter confirms  hunter came within 8 m, then game over
 PASS  downed (battery dead) -> hunter confirms    hunter came within 8 m, then game over
-PASS  Easy / Normal / Hard / Brutal games       hunter impacts 0 in every game
+PASS  Easy / Normal / Hard / Brutal (3/9/18/27 hunters)   0 crashes, 0 friendly fire, wingmen ≥ 10 m apart
 ```
 
 The autopilot player is a simple flee-and-stay-low script, so a human who uses the buildings plays much better. Across 32 full games the hunters never flew into anything.
@@ -112,7 +118,7 @@ The autopilot player is a simple flee-and-stay-low script, so a human who uses t
 ## Not done yet
 
 - Sound.
-- Dedicated high-altitude spotter drones that relay your position to the hunters. Hunters already climb high to search, but there's no separate spotter role.
+- Dedicated high-altitude spotter drones. The swarm already shares every sighting and climbs high to search, but no hunter is a dedicated spotter.
 - A "return to base" objective as an alternative way to win.
 - Cars only collide at street level (below 3 m) and are simplified.
 

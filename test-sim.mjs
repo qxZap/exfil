@@ -128,26 +128,31 @@ for (const [label, cripple] of [['rotor shot off', P => { P.rotors[2].health = 0
     `downed at ${downedAt?.toFixed(1)} s, hunter came within ${closest.toFixed(1)} m, game over at ${endAt?.toFixed(1) ?? 'never'} s (${g.status})`);
 }
 
-// 7. Monte Carlo: an autopilot player tries to escape; the hunter must never fly into anything
-const SEEDS = +process.env.SEEDS || 4;
-let crashes = 0;
+// 7. Monte Carlo: an autopilot player tries to escape the full swarm for each difficulty
+// (3 / 9 / 18 / 27 hunters). No hunter may fly into anything, including each other,
+// and none may shoot a wingman.
+const SEEDS = +process.env.SEEDS || 3;
 for (const diff of Object.keys(DIFFICULTY)) {
   const tally = {};
-  let hunterImpacts = 0, secs = 0;
+  let impacts = 0, friendly = 0, closest = Infinity, secs = 0;
   for (let seed = 1; seed <= SEEDS; seed++) {
-    const g = await Game.create({ seed: seed * 7 + diff.length, difficulty: diff, hunters: 1 });
-    const ev = new Evader(g), H = g.hunters[0];
+    const g = await Game.create({ seed: seed * 7 + diff.length, difficulty: diff });
+    const ev = new Evader(g), H = g.hunters.map(h => h.d);
     for (let i = 0; i * DT < 150 && !g.ended; i++) {
       const t = i * DT;
       const evs = g.step(t < 1 ? { v: v3(), vz: 4, heading: 0 } : ev.command(t));
-      for (const e of evs) if (e.type === 'impact' && e.who === H.d) hunterImpacts++;
+      for (const e of evs) {
+        if (e.type === 'impact' && e.who !== g.player) impacts++;
+        if (e.type === 'hit' && e.who !== g.player && e.by !== g.player) friendly++;
+      }
+      if (i % 12 === 0) for (let a = 0; a < H.length; a++) for (let b = a + 1; b < H.length; b++) if (H[a].alive && H[b].alive) closest = Math.min(closest, dist(H[a].pos, H[b].pos));
     }
     secs += g.time;
     tally[g.status] = (tally[g.status] ?? 0) + 1;
   }
-  crashes += hunterImpacts;
-  check(`${DIFFICULTY[diff].label.padEnd(6)} ${SEEDS} games vs autopilot player`, hunterImpacts === 0,
-    `hunter impacts ${hunterImpacts} | outcomes ${Object.entries(tally).map(([k, v]) => `${k} ${v}`).join(', ')} | avg ${(secs / SEEDS).toFixed(0)} s`);
+  const d = DIFFICULTY[diff];
+  check(`${d.label.padEnd(6)} ${String(d.hunters).padStart(2)} hunters × ${SEEDS} games`, impacts === 0 && friendly === 0,
+    `crashes ${impacts}, friendly fire ${friendly}, closest wingmen ${closest.toFixed(1)} m | ${Object.entries(tally).map(([k, v]) => `${k} ${v}`).join(', ')} | avg ${(secs / SEEDS).toFixed(0)} s`);
 }
 
 const failed = results.filter(x => !x).length;

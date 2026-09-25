@@ -188,10 +188,10 @@ export function downwash(hp, p) {
 // source with motor lag, health and battery sag; the flight controller mixes per-rotor thrust.
 const ARM = 0.21;
 export const DIFFICULTY = {
-  easy:   { label: 'Easy',   speed: 1.00, radar: 330, camera: 280, spread: 1.3, reaction: 0.9 },
-  normal: { label: 'Normal', speed: 1.10, radar: 400, camera: 330, spread: 0.95, reaction: 0.6 },
-  hard:   { label: 'Hard',   speed: 1.20, radar: 460, camera: 380, spread: 0.7, reaction: 0.4 },
-  brutal: { label: 'Brutal', speed: 1.25, radar: 520, camera: 420, spread: 0.5, reaction: 0.25 },
+  easy:   { label: 'Easy',   hunters: 3,  speed: 1.00, radar: 330, camera: 280, spread: 1.3, reaction: 0.9 },
+  normal: { label: 'Normal', hunters: 9,  speed: 1.10, radar: 400, camera: 330, spread: 0.95, reaction: 0.6 },
+  hard:   { label: 'Hard',   hunters: 18, speed: 1.20, radar: 460, camera: 380, spread: 0.7, reaction: 0.4 },
+  brutal: { label: 'Brutal', hunters: 27, speed: 1.25, radar: 520, camera: 420, spread: 0.5, reaction: 0.25 },
 };
 export const AIRFRAME = {
   maxThrust: 20,        // N per rotor at full charge (thrust/weight ≈ 3.7)
@@ -453,12 +453,16 @@ export class Navigator {
     for (const hp of helis) for (let s = 5; s <= range; s += 10) worst = Math.max(worst, downwash(hp, add(from, mul(dir, s))));
     return worst;
   }
-  // goal: world point; speed: wanted m/s; returns a flight-controller command
-  steer(goal, speed, t, { helis = [], minAgl = 6, heading = null } = {}) {
+  // goal: world point; speed: wanted m/s; others: positions of friendly drones to keep clear of.
+  // returns a flight-controller command
+  steer(goal, speed, t, { helis = [], minAgl = 6, heading = null, others = [] } = {}) {
     const d = this.d, p = d.pos, v = d.vel, sp = len(v);
     const to = sub(goal, p), gd = len(to), want = norm(to);
     const range = clamp(sp * 3 + 15, 25, 120);
-    const aBrake = 0.75 * G * Math.tan(AIRFRAME.maxTilt);
+    // plan with the braking the airframe reliably achieves (measured ~8.6 m/s²), not the theoretical 17
+    const aBrake = 7.5;
+    // wingmen, and where each will be in ~0.8 s: avoid both
+    const near = others.filter(o => dist(o.p, p) < 90).map(o => ({ ...o, f: add(o.p, mul(o.v, 0.8)) }));
     if (!this.scan || t - this.scanAt > 1 / 15) { // think at 15 Hz
       const baseH = headingOf(flat(want).x || flat(want).z ? want : fwdOf(d.heading));
       let best = null;
@@ -470,6 +474,10 @@ export class Navigator {
         let score = dot(dir, want) * Math.min(clear, gd) + 0.12 * clear
           + (this.last ? 3 * dot(dir, this.last) : 0) - wash * 1.5 - (clear < 8 ? 60 : 0);
         if (p.y < minAgl + 2 && dir.y < 0) score -= 40; // don't dive into the street
+        for (const o of near) for (const q of [o.p, o.f]) { // don't fly through a wingman (now or soon)
+          const rel = sub(q, p), along = dot(rel, dir);
+          if (along > 0 && along < 60) { const miss = len(sub(rel, mul(dir, along))); if (miss < 15) score -= (15 - miss) * 6; }
+        }
         if (!best || score > best.score) best = { dir, clear, score, wash };
       }
       // momentum goes where I'm moving, not where I want to go: check that line too
@@ -479,74 +487,104 @@ export class Navigator {
     const { dir, clear, clearVel } = this.scan;
     // stopping distance = reaction (tilting back takes ~0.35 s) + v²/2a
     const stopOK = c => Math.max(0, Math.sqrt(aBrake * aBrake * 0.35 * 0.35 + 2 * aBrake * Math.max(0, c - 6)) - aBrake * 0.35);
-    const vMax = Math.min(speed, stopOK(clear), stopOK(clearVel) + 4, Math.sqrt(2 * aBrake * 0.6 * gd) + 1);
-    let vz = dir.y * vMax;
+    const vMax = Math.min(speed, stopOK(clear), Math.max(1.5, stopOK(clearVel)), Math.sqrt(2 * aBrake * 0.6 * gd) + 1);
+    let vel = mul(dir, vMax);
+    // personal space: push away from a wingman, earlier when we're closing fast, but only if
+    // there's room that way (never shove myself into a wall)
+    for (const o of near) {
+      const away = sub(p, o.p), r = len(away), closing = Math.max(0, -dot(sub(v, o.v), norm(away)));
+      const bubble = 15 + closing * 0.6;
+      if (r < bubble && this.clearance(p, norm(away), 8) > 6) vel = add(vel, mul(norm(away), (bubble - r) * 1.5));
+    }
+    // already drifting toward a surface: cancel the part of the command that goes into it
+    if (sp > 0.5 && clearVel < 12) {
+      const vh = mul(v, 1 / sp), into = dot(vel, vh);
+      if (into > 0) vel = sub(vel, mul(vh, into * (1 - clearVel / 12)));
+    }
+    let vz = vel.y;
     const agl = p.y; // city ground is at 0; rooftops are handled by the sweep
     if (agl < minAgl) vz = Math.max(vz, (minAgl - agl) * 1.5);
-    return { v: mul(flat(dir), vMax), vz: clamp(vz, -8, 10), heading: heading ?? (sp > 2 ? headingOf(v) : d.heading), clear, wash: this.scan.wash };
+    return { v: flat(vel), vz: clamp(vz, -8, 10), heading: heading ?? (sp > 2 ? headingOf(v) : d.heading), clear, wash: this.scan.wash };
   }
 }
 
-// ---------------------------------------------------------------- the hunter's brain
-// TRANSIT to the server it was told about → CHASE when a sensor has you → SEARCH (climb high,
-// go to where you were heading, spiral out) when it loses you. Shoots with a lead solution.
+// ---------------------------------------------------------------- the hunters' brains
+// TRANSIT to the server they were told about → CHASE when any hunter has you (a shared data
+// link: one sees you, all know) → SEARCH (climb high, fan out around where you were heading)
+// when the link loses you. Each takes its own slot around you so they surround instead of queue,
+// they keep their distance from each other, and hold fire when a wingman is in the line of fire.
 export class Hunter {
-  constructor(game, drone, diff) {
-    this.g = game; this.d = drone; this.diff = diff;
+  constructor(game, drone, diff, index) {
+    this.g = game; this.d = drone; this.diff = diff; this.i = index;
     this.nav = new Navigator(drone);
+    this.nav.scanAt = -index / 15 / 4; // stagger the heavy thinking across frames
     this.sensors = new Sensors(drone, { radar: diff.radar, camera: diff.camera });
     this.mode = 'TRANSIT'; this.thought = 'Heading to the server the operator flagged.';
     this.lkp = null; this.searchT = 0; this.seenAt = -99; this.burst = 0;
+    this.slot = index * 2.39996; // golden angle: slots spread evenly however many there are
   }
+  wingmen() { return this.g.hunters.filter(h => h !== this && h.d.alive).map(h => ({ p: h.d.pos, v: h.d.vel })); }
   think(t, dt) {
     const g = this.g, d = this.d, me = d.pos, target = g.player;
     if (!d.alive) { this.mode = 'DOWN'; this.thought = 'Lost power.'; d.firing = false; return d.control({ v: v3(), vz: -5, heading: d.heading }, dt); }
     this.sensors.update([target], t, g.r);
-    if (g.status === 'downed') { // you're down and it knows where you fell: go and confirm, low and slow
-      this.mode = 'CONFIRM'; d.firing = false;
+    const helis = g.helis.map(h => h.pose.p), others = this.wingmen();
+    if (g.status === 'downed') { // you're down: the nearest goes in to confirm, the rest circle above
       const tp = target.pos, r = dist(me, tp);
+      const live = g.hunters.filter(h => h.d.alive).sort((a, b) => dist(a.d.pos, tp) - dist(b.d.pos, tp));
+      this.mode = 'CONFIRM'; d.firing = false;
       this.sensors.lookDir = norm(sub(tp, me));
-      this.thought = `Target is down. Closing in to confirm, ${Math.round(r)} m.`;
-      return d.control(this.nav.steer(add(tp, v3(0, 3, 0)), r > 60 ? 45 : 8, t, { helis: g.helis.map(h => h.pose.p), minAgl: 1.5, heading: headingOf(sub(tp, me)) }), dt);
+      if (live[0] === this) {
+        this.thought = `Target is down. Closing in to confirm, ${Math.round(r)} m.`;
+        return d.control(this.nav.steer(add(tp, v3(0, 3, 0)), r > 60 ? 45 : 8, t, { helis, minAgl: 1.5, heading: headingOf(sub(tp, me)), others }), dt);
+      }
+      // wait in a stack well above the rooftops, each on its own ring and height
+      const a = this.slot + t * 0.15, R = 60 + (this.i % 5) * 15;
+      this.thought = `Target is down. Holding overhead while ${live[0].d.name} confirms.`;
+      return d.control(this.nav.steer(v3(tp.x + R * Math.cos(a), 110 + (this.i % 6) * 14, tp.z + R * Math.sin(a)), 25, t, { helis, minAgl: 30, heading: headingOf(sub(tp, me)), others }), dt);
     }
-    const trk = this.sensors.track(target, t, 1.0);
-    const helis = g.helis.map(h => h.pose.p);
+    const own = this.sensors.track(target, t, 1.0);
+    if (own && (!g.link || own.t >= g.link.t)) g.link = { ...own, by: this };
+    const link = g.link && t - g.link.t < 1.0 ? g.link : null;
+    const trk = own ?? link;
     let cmd, fire = false, aimAt = null;
     if (trk) {
       if (this.mode !== 'CHASE') this.reactUntil = t + this.diff.reaction;
       this.mode = 'CHASE'; this.lkp = trk; this.seenAt = t;
       const rel = sub(trk.pos, me), r = len(rel);
-      // intercept: aim where you'll be; close fast when far, hold a firing standoff when near
+      // intercept: aim where you'll be; close fast when far, then take my own slot around you
       const tti = r / Math.max(len(d.vel) + 5, 15);
       const pred = add(trk.pos, mul(trk.vel, Math.min(tti, 3)));
-      const stand = r < 140 ? add(trk.pos, add(mul(norm(flat(sub(me, trk.pos))), 70), v3(0, 18, 0))) : pred;
-      cmd = this.nav.steer(stand, 60, t, { helis, minAgl: 4, heading: headingOf(rel) });
+      const R = 70 + (this.i % 3) * 25, a = this.slot;
+      const stand = r < 160 ? add(trk.pos, v3(R * Math.cos(a), 18 + (this.i % 4) * 7, R * Math.sin(a))) : pred;
+      cmd = this.nav.steer(stand, 60, t, { helis, minAgl: 4, heading: headingOf(rel), others });
       this.sensors.lookDir = norm(rel);
       if (r < 260 && t > this.reactUntil && trk.src !== 'ACOUSTIC') { aimAt = trk; fire = true; }
-      this.thought = `${trk.src} contact, ${Math.round(r)} m. ${fire ? 'Engaging.' : r < 140 ? 'Holding firing position.' : 'Intercepting.'}`;
+      const via = own ? trk.src : `data link (${trk.by?.d.name ?? 'swarm'})`;
+      this.thought = `${via} contact, ${Math.round(r)} m. ${fire ? 'Engaging.' : r < 160 ? 'Taking my slot around the target.' : 'Intercepting.'}`;
     } else if (this.lkp) {
       if (this.mode !== 'SEARCH') { this.mode = 'SEARCH'; this.searchT = t; }
       const since = t - this.seenAt;
-      // where would you be now if you kept going? Go there high, then spiral out
+      // where would you be now if you kept going? Go there high, then fan out in expanding circles
       const guess = add(this.lkp.pos, mul(flat(this.lkp.vel), Math.min(since, 8)));
-      const alt = Math.max(guess.y + 60, 140);
-      const onTop = len(flat(sub(guess, me))) < 60;
-      const R = onTop ? Math.min(40 + (t - this.searchT) * 6, 450) : 0, a = (t - this.searchT) * 0.35;
+      const alt = Math.max(guess.y + 60, 140) + (this.i % 4) * 12;
+      const onTop = len(flat(sub(guess, me))) < 60 + (this.i % 5) * 40;
+      const R = onTop ? Math.min(40 + (this.i % 5) * 40 + (t - this.searchT) * 6, 500) : 0, a = this.slot + (t - this.searchT) * 0.35;
       const goal = v3(guess.x + R * Math.cos(a), alt, guess.z + R * Math.sin(a));
-      cmd = this.nav.steer(goal, 60, t, { helis, minAgl: 20 });
+      cmd = this.nav.steer(goal, 60, t, { helis, minAgl: 20, others });
       this.sensors.lookDir = norm(add(flat(sub(guess, me)), v3(0, -0.6 * len(flat(sub(guess, me))) - 30, 0)));
       if (len(flat(sub(guess, me))) < 5) this.sensors.lookDir = v3(0, -1, 0);
       this.thought = me.y < alt - 20 ? `Lost you ${Math.round(since)} s ago. Climbing to ${Math.round(alt)} m to look down.` : `Searching around your last track (radius ${Math.round(R)} m).`;
     } else {
       this.mode = 'TRANSIT';
-      const goal = add(g.server, v3(0, 60, 0));
-      cmd = this.nav.steer(goal, 60, t, { helis, minAgl: 25 });
+      const a = this.slot, goal = add(g.server, v3(60 * Math.cos(a), 60 + (this.i % 4) * 10, 60 * Math.sin(a)));
+      cmd = this.nav.steer(goal, 60, t, { helis, minAgl: 25, others });
       this.sensors.lookDir = norm(sub(g.server, me));
       this.thought = `Heading to the flagged server, ${Math.round(dist(me, g.server))} m out.`;
     }
     if (cmd.wash > 3) this.thought += ' Steering clear of helicopter downwash.';
     d.control(cmd, dt);
-    // gun: lead the target, compensate drop; fire in bursts
+    // gun: lead the target, compensate drop; fire in bursts, never through a wingman
     d.firing = false;
     if (fire && aimAt) {
       const sol = leadSolution(d.muzzle, d.vel, aimAt.pos, aimAt.vel);
@@ -554,7 +592,10 @@ export class Hunter {
         d.aim = sol;
         this.burst -= dt;
         if (this.burst < -0.6) this.burst = 0.9;
-        d.firing = this.burst > 0 && this.sensors.los(me, aimAt.pos);
+        const r = dist(me, aimAt.pos);
+        const blocked = others.some(o => { const rel = sub(o, me), along = dot(rel, sol); return along > 0 && along < r && len(sub(rel, mul(sol, along))) < 4; });
+        if (blocked) this.thought += ' Wingman in my line of fire, holding.';
+        d.firing = this.burst > 0 && !blocked && this.sensors.los(me, aimAt.pos);
       }
     } else d.aim = fwdOf(d.heading);
   }
@@ -577,8 +618,12 @@ export class Evader {
   constructor(game) { this.g = game; this.nav = new Navigator(game.player); this.jink = 0; this.dir = v3(1, 0, 0); }
   command(t) {
     const g = this.g, me = g.player.pos;
-    const trk = g.playerSensors.track(g.hunters[0]?.d, t, 3);
-    if (trk) this.dir = norm(flat(sub(me, trk.pos)));
+    let push = v3();
+    for (const H of g.hunters) {
+      const k = H.d.alive && g.playerSensors.track(H.d, t, 3);
+      if (k) { const away = flat(sub(me, k.pos)), r = len(away) || 1; push = add(push, mul(away, 1 / (r * r))); }
+    }
+    if (len(push) > 0) this.dir = norm(push);
     if (t > this.jink) { this.jink = t + 3 + g.r() * 3; this.side = (g.r() - 0.5) * 0.8; }
     const away = norm(add(this.dir, mul(rightOf(headingOf(this.dir)), this.side ?? 0)));
     const goal = add(me, add(mul(away, 120), v3(0, 22 - me.y, 0)));
@@ -590,7 +635,7 @@ export class Evader {
 // ---------------------------------------------------------------- the game
 export class Game {
   static async create(opts) { await ready; return new Game(opts); }
-  constructor({ seed = 1, difficulty = 'normal', hunters = 1 } = {}) {
+  constructor({ seed = 1, difficulty = 'normal', hunters } = {}) {
     this.r = rng(seed); this.seed = seed;
     this.diff = { key: difficulty, ...DIFFICULTY[difficulty] };
     this.world = new RAPIER.World(v3(0, -G, 0));
@@ -608,12 +653,18 @@ export class Game {
     this.server = v3(tower.x, roof + 0.9, tower.z);
     this.player = new Drone(this.world, { pos: v3(tower.x + 2.5, roof + 0.3, tower.z), team: 'player', name: 'You' });
     this.playerSensors = new Sensors(this.player);
-    this.hunters = Array.from({ length: hunters }, (_, i) => {
-      const a = this.r() * Math.PI * 2 + i * 2.1, R = 380 + this.r() * 80; // close enough to matter, far enough to take off
-      const p = v3(this.server.x + R * Math.cos(a), 150 + this.r() * 40, this.server.z + R * Math.sin(a));
+    // hunters scrambled from all around: 350–650 m out (inside the 700 m you need), 40 m apart
+    const n = hunters ?? this.diff.hunters, a0 = this.r() * Math.PI * 2, spots = [];
+    while (spots.length < n) {
+      const a = a0 + spots.length * 2.39996 + (this.r() - 0.5) * 0.4, R = 350 + this.r() * 300;
+      const p = v3(this.server.x + R * Math.cos(a), 130 + this.r() * 90, this.server.z + R * Math.sin(a));
+      if (spots.every(q => dist(p, q) > 40)) spots.push(p);
+    }
+    this.hunters = spots.map((p, i) => {
       const d = new Drone(this.world, { pos: p, heading: headingOf(sub(this.server, p)), team: 'hunter', speed: this.diff.speed, name: `Hunter ${i + 1}` });
-      return new Hunter(this, d, this.diff);
+      return new Hunter(this, d, this.diff, i);
     });
+    this.link = null; // the hunters' shared track of you
     this.drones = [this.player, ...this.hunters.map(h => h.d)];
     for (const d of this.drones) d.rand = this.r;
     this.rounds = [];
@@ -770,6 +821,6 @@ export class Game {
     d.body.applyImpulseAtPoint(mul(norm(b.v), 0.03), part.c, true);
     if (b.owner === this.player) this.stats.hits++;
     if (d === this.player) this.stats.taken++;
-    events.push({ type: 'hit', who: d, p: part.c, rotor: part.rotor });
+    events.push({ type: 'hit', who: d, by: b.owner, p: part.c, rotor: part.rotor });
   }
 }
