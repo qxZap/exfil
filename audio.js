@@ -7,7 +7,7 @@ import { dist, len, sub, dot, norm } from './sim.js';
 const C = 343; // speed of sound, m/s
 
 export class Audio {
-  constructor() { this.ctx = null; this.muted = false; this.voice = true; this.volume = 0.6; this.voiceVol = 0.8; }
+  constructor() { this.ctx = null; this.muted = false; this.radioOn = true; this.volume = 0.6; this.voiceVol = 0.8; }
 
   // must be called from a user gesture (browsers keep audio locked until then)
   start() {
@@ -26,6 +26,7 @@ export class Audio {
     // shared noise buffers
     this.white = this.noiseBuffer(2, v => v);
     let last = 0; this.brown = this.noiseBuffer(4, v => (last = (last + 0.02 * v) / 1.02) * 3.5);
+    this.loadRadio();
     this.buildOwnDrone();
     this.buildAmbience();
     this.voices = []; this.helis = [];
@@ -50,7 +51,7 @@ export class Audio {
   // sine at that rate for body. That's the "whirr" of a real prop, not an electric buzz.
   whirr(out, noiseQ = 1.4) {
     const ctx = this.ctx;
-    const n = this.loop(this.white), bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = noiseQ;
+    const n = this.loop(this.brown), bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = noiseQ;
     const am = ctx.createGain(); am.gain.value = 0.55;
     const lfo = ctx.createOscillator(); lfo.type = 'sine'; const depth = ctx.createGain(); depth.gain.value = 0.45;
     lfo.connect(depth).connect(am.gain); lfo.start();
@@ -63,12 +64,12 @@ export class Audio {
   setWhirr(v, bpf, level, t) {
     v.lfo.frequency.setTargetAtTime(bpf, t, 0.03);
     v.body.frequency.setTargetAtTime(bpf, t, 0.03);
-    v.bp.frequency.setTargetAtTime(300 + bpf * 3, t, 0.05);
+    v.bp.frequency.setTargetAtTime(80 + bpf * 1.1, t, 0.05); // deep hush, not a hiss
     v.g.gain.setTargetAtTime(level, t, 0.05);
   }
   buildOwnDrone() {
     const ctx = this.ctx, out = ctx.createGain(); out.gain.value = 0.6; out.connect(this.master);
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2500; lp.connect(out);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1000; lp.connect(out);
     this.rotors = [0, 1, 2, 3].map(() => this.whirr(lp));
   }
 
@@ -141,31 +142,50 @@ export class Audio {
     }
   }
 
-  // ---------- radio: squelch, garbled voice (or text-to-speech), roger beep ----------
-  radio(text, { voice = true } = {}) {
-    if (!this.ctx || this.muted) return;
-    const ctx = this.ctx, t0 = ctx.currentTime;
-    this.burst({ dur: 0.12, freq: 1800, q: 1.5, gain: 0.25 }); // squelch open
-    const dur = Math.min(0.9 + text.length * 0.055, 5.5);
-    if (voice && this.voice && 'speechSynthesis' in window) {
-      const u = new SpeechSynthesisUtterance(text);
-      u.rate = 1.12; u.pitch = 0.85; u.volume = this.voiceVol;
-      const v = speechSynthesis.getVoices().find(v => /en(-|_)(US|GB)/i.test(v.lang) && /male|david|george|daniel|guy/i.test(v.name)) || speechSynthesis.getVoices().find(v => /^en/i.test(v.lang));
-      if (v) u.voice = v;
-      speechSynthesis.cancel(); speechSynthesis.speak(u);
-    } else { // syllable-chopped band-limited noise with a little drive: sounds like distant radio talk
-      const s = ctx.createBufferSource(); s.buffer = this.white;
-      const f1 = ctx.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 1100; f1.Q.value = 2.5;
-      const env = ctx.createGain(); env.gain.value = 0;
-      for (let t = 0; t < dur; t += 0.09 + Math.random() * 0.1) env.gain.setTargetAtTime(Math.random() < 0.8 ? 0.25 + Math.random() * 0.3 : 0, t0 + 0.12 + t, 0.02);
-      env.gain.setTargetAtTime(0, t0 + 0.12 + dur, 0.03);
-      const drive = ctx.createWaveShaper(); drive.curve = Float32Array.from({ length: 256 }, (_, i) => Math.tanh((i / 128 - 1) * 3));
-      s.connect(f1).connect(drive).connect(env).connect(this.master); s.start(t0 + 0.1); s.stop(t0 + dur + 0.3);
+  // ---------- enemy radio: recorded voice clips (CC0 Piper voice) through a CB-radio chain ----------
+  async loadRadio() {
+    const keys = ['hunter', ...Array.from({ length: 27 }, (_, i) => `n${i + 1}`), ...Array.from({ length: 10 }, (_, i) => `d${i}`),
+      'radar_contact', 'visual', 'acoustic', 'bearing', 'range', 'hundred', 'thousand', 'converge', 'copy', 'roger', 'wilco', 'engaging',
+      'check_fire', 'lost', 'searching', 'climbing', 'target_low', 'enroute', 'target_down', 'confirmed', 'is_down',
+      'taking_fire', 'im_hit', 'low_battery', 'new_lead', 'out', 'going_dark'];
+    this.clips = {};
+    await Promise.all(keys.map(async k => {
+      try { this.clips[k] = await this.ctx.decodeAudioData(await (await fetch(`./assets/radio/${k}.wav`)).arrayBuffer()); } catch {}
+    }));
+  }
+  // Voice → 400 Hz high-pass → 2.6 kHz low-pass → mid "honk" → overdrive → level, over a bed of hiss,
+  // opened and closed by a squelch burst. Weak (distant) transmitters get more hiss and drop-outs.
+  transmit(tokens, { quality = 1 } = {}) {
+    if (!this.ctx || !this.clips || this.muted || !this.radioOn) return 0;
+    const ctx = this.ctx, t0 = ctx.currentTime + 0.18;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 400; hp.Q.value = 0.8;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600; lp.Q.value = 0.9;
+    const honk = ctx.createBiquadFilter(); honk.type = 'peaking'; honk.frequency.value = 1700; honk.gain.value = 8; honk.Q.value = 1.2;
+    const drive = ctx.createWaveShaper(); drive.curve = Float32Array.from({ length: 1024 }, (_, i) => Math.tanh((i / 512 - 1) * 5) * 0.8); drive.oversample = '2x';
+    const level = ctx.createGain(); level.gain.value = 0;
+    hp.connect(lp).connect(honk).connect(drive).connect(level).connect(this.master);
+    let at = t0;
+    for (const tok of tokens) {
+      if (tok === ',') { at += 0.14; continue; }
+      const b = this.clips[tok]; if (!b) continue;
+      const src = ctx.createBufferSource(); src.buffer = b; src.playbackRate.value = 1.04; src.connect(hp); src.start(at);
+      at += b.duration / 1.04 + 0.04;
     }
-    const beepAt = t0 + (voice && this.voice ? 0.25 : dur + 0.15);
-    const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 1250;
-    g.gain.setValueAtTime(0.12, beepAt); g.gain.setValueAtTime(0, beepAt + 0.08);
-    o.connect(g).connect(this.master); o.start(beepAt); o.stop(beepAt + 0.1);
+    const end = at + 0.05, v = this.voiceVol * 0.9;
+    level.gain.setValueAtTime(0, t0 - 0.01); level.gain.linearRampToValueAtTime(v, t0 + 0.02);
+    // weak signal: the voice fades in and out
+    if (quality < 0.7) for (let x = t0 + 0.3; x < end; x += 0.25 + Math.random() * 0.4) level.gain.setTargetAtTime(v * (0.35 + Math.random() * 0.65 * quality + 0.2), x, 0.05);
+    level.gain.setValueAtTime(v, end - 0.02); level.gain.linearRampToValueAtTime(0, end);
+    // carrier hiss under the voice, squelch burst when the mic keys and the classic "kssht" tail
+    const hiss = ctx.createBufferSource(); hiss.buffer = this.white;
+    const hb = ctx.createBiquadFilter(); hb.type = 'bandpass'; hb.frequency.value = 1900; hb.Q.value = 0.6;
+    const hg = ctx.createGain(); hg.gain.value = 0;
+    hiss.connect(hb).connect(hg).connect(this.master);
+    const h = this.voiceVol * (0.03 + (1 - quality) * 0.09);
+    hg.gain.setValueAtTime(this.voiceVol * 0.25, t0 - 0.16); hg.gain.exponentialRampToValueAtTime(Math.max(h, 0.001), t0 - 0.02);
+    hg.gain.setValueAtTime(h, end); hg.gain.linearRampToValueAtTime(this.voiceVol * 0.32, end + 0.02); hg.gain.exponentialRampToValueAtTime(0.0005, end + 0.24);
+    hiss.start(t0 - 0.17, Math.random()); hiss.stop(end + 0.3);
+    return end + 0.3 - ctx.currentTime;
   }
 
   // ---------- per-frame update ----------

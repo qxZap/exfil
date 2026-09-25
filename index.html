@@ -48,6 +48,7 @@
   #radioLog div { background: rgba(10,13,17,.62); border-left: 3px solid var(--hud); padding: 4px 8px; margin-top: 4px; border-radius: 4px; }
   #radioLog div.net { border-left-color: var(--bad); color: #d9b3b3; font-style: italic; }
   #radioLog b { color: var(--hud); margin-right: 6px; font-size: 11px; letter-spacing: .08em; } #radioLog .net b { color: var(--bad); }
+  #radioLog i { color: #ffaa3c; font-style: normal; margin-right: 6px; font-size: 11px; }
   .vol { display: grid; grid-template-columns: 110px 1fr 48px; align-items: center; gap: 10px; margin: 6px 0; color: #b9c3cd; }
   .vol input { accent-color: var(--hud); }
   #loading { position: fixed; inset: 0; display: none; place-items: center; background: #0b0e12; z-index: 6; color: var(--hud); letter-spacing: .2em; }
@@ -101,7 +102,7 @@
   <span><kbd>WASD</kbd>tilt</span><span><kbd>Q/E</kbd>yaw</span><span><kbd>Space/X</kbd>up / down</span><span><kbd>Shift</kbd>gentle</span>
   <span><kbd>Mouse</kbd>look · aim</span><span><kbd>LMB</kbd>fire</span><span><kbd>F</kbd>mode: <b id="kMode">ANGLE</b></span><span><kbd>C</kbd>1st / 3rd person</span>
   <span><kbd>G</kbd>hold: power cut (drop)</span><span><kbd>H</kbd>posture: <b id="kPosture">FACE</b></span><span><kbd>B</kbd>hunter intel</span><span><kbd>R</kbd>restart</span>
-  <span><kbd>M</kbd>sound on/off</span><span><kbd>- / =</kbd>volume</span><span><kbd>N</kbd>radio voice</span><span><kbd>Esc</kbd>free mouse</span><span><kbd>K</kbd>hide these keys</span>
+  <span><kbd>M</kbd>sound on/off</span><span><kbd>- / =</kbd>volume</span><span><kbd>N</kbd>intercept radio</span><span><kbd>Esc</kbd>free mouse</span><span><kbd>K</kbd>hide these keys</span>
 </div>
 <div id="keysHint" class="panel"><kbd>K</kbd> controls</div>
 <div id="menu" class="screen">
@@ -114,6 +115,9 @@
       <button data-v="easy">Easy · 3 hunters · same speed</button><button data-v="normal" class="sel">Normal · 9 · +10%</button><button data-v="hard">Hard · 18 · +20%</button><button data-v="brutal">Brutal · 27 · +25%</button>
     </div>
     <p style="font-size:12px">They share one data link: when one of them sees you, they all know where you are.</p>
+    <div class="lab">Time of day</div>
+    <div class="choices" id="tod"><button data-v="6.6">Dawn</button><button data-v="13" class="sel">Day</button><button data-v="17.4">Dusk</button><button data-v="23.5">Night</button></div>
+    <div class="choices" id="clockMode"><button data-v="frozen" class="sel">Clock frozen</button><button data-v="run">Clock runs (1 h per 2 min: the sun and shadows move)</button></div>
     <div class="keys">
       <kbd>Mouse</kbd><span>look / aim (click to capture) · hold left button to fire</span>
       <kbd>W A S D</kbd><span>tilt: tap for a little, hold for more · <kbd>Shift</kbd> gentle</span>
@@ -123,12 +127,12 @@
       <kbd>H</kbd><span>posture: FACE first (60° max) or HEAD first: tips up to ~72°, all power to speed (+35%), 2× the battery drain</span>
       <kbd>G</kbd><span>hold to cut power: drop like a stone (stays level), release to catch yourself</span>
       <kbd>C</kbd><span>first / third person · <kbd>B</kbd> intercepted hunter telemetry</span>
-      <kbd>M / N</kbd><span>sound on/off · operator voice on/off (radio stays, garbled)</span>
+      <kbd>M / N</kbd><span>sound on/off · intercept receiver on/off (you listen in on the hunters' own net; each transmission gives a DF bearing on your radar)</span>
       <kbd>Esc</kbd><span>release the mouse</span>
     </div>
     <div class="lab">Sound</div>
     <div class="vol"><span>Volume</span><input type="range" id="vol" min="0" max="100" value="60"><span id="volV">60%</span></div>
-    <div class="vol"><span>Radio voice</span><input type="range" id="voiceVol" min="0" max="100" value="80"><span id="voiceVolV">80%</span></div>
+    <div class="vol"><span>Enemy radio</span><input type="range" id="voiceVol" min="0" max="100" value="80"><span id="voiceVolV">80%</span></div>
     <button class="go" id="start">Take off</button>
     <p style="font-size:11px;margin-top:14px;color:var(--dim)">Models: "Drone" by NateGazzard (poly.pizza, CC BY 3.0, rotors re-pivoted) · helicopter by kazuma (CC0) · cars, trees, street lights, water towers by Kenney (CC0). Full list in assets/models/CREDITS.md.</p>
   </div>

@@ -1,63 +1,86 @@
-// The radio net: your operator ("OPS") talks you through the escape, and you can overhear the
-// hunters' own net. Reads the game state every frame and decides what's worth saying.
+// The enemy radio net, intercepted. Nobody helps you: all you hear is the hunters talking to each
+// other, and what they say is what their AI is actually doing (contact, lost contact, searching,
+// engaging, a wingman down, low battery, confirming the kill). Every transmission also gives you a
+// direction-finding (DF) bearing to the hunter that keyed the mic, even if you can't see it.
 import { dist } from './sim.js';
 
-const words = n => ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][n] ?? String(n);
+const compass = (from, to) => Math.round(((Math.atan2(to.x - from.x, to.z - from.z) * 180 / Math.PI) + 360) % 360) % 360;
+const digits = n => String(n).padStart(3, '0').split('').map(d => `d${d}`);
+const rangeTokens = m => m >= 1000 ? ['thousand'] : [`d${Math.max(1, Math.round(m / 100))}`, 'hundred'];
+const TEXT = {
+  hunter: 'Hunter', radar_contact: 'radar contact', visual: 'visual contact', acoustic: 'acoustic contact, bearing only', bearing: 'bearing',
+  range: 'range', hundred: 'hundred', thousand: 'one thousand plus', converge: 'all units converge', copy: 'copy', roger: 'roger',
+  wilco: 'wilco, moving', engaging: 'engaging', check_fire: 'check fire, friendly in line', lost: 'lost contact',
+  searching: 'searching last known', climbing: 'climbing to search altitude', enroute: 'en route to the rooftop',
+  target_down: 'target is down, moving to confirm', confirmed: 'confirmed. package recovered.', is_down: 'is down',
+  taking_fire: 'taking fire', im_hit: "I'm hit", low_battery: 'low battery, landing', new_lead: 'I have the lead', out: 'out',
+  going_dark: 'no joy, going wide',
+};
+const say = tokens => tokens.map(t => t === ',' ? ',' : /^d\d$/.test(t) ? (t === 'd9' ? 'niner' : t[1]) : /^n\d+$/.test(t) ? t.slice(1) : TEXT[t] ?? t)
+  .join(' ').replace(/ ,/g, ',').replace(/(\d) (?=\d)/g, '$1');
 
 export class RadioNet {
   constructor(audio, log) { this.audio = audio; this.log = log; this.reset(); }
-  reset() { this.said = new Set(); this.queue = []; this.busyUntil = 0; this.tracked = false; this.lostAt = null; this.milestone = 0; this.alive = null; this.linkBy = null; }
+  reset() { this.queue = []; this.busyUntil = 0; this.df = []; this.st = new Map(); this.lead = null; this.linkLive = false; this.lostAt = null; this.said = new Set(); }
 
-  say(from, text, { voice = from === 'OPS', key = null, priority = false } = {}) {
+  tx(hunter, tokens, { key = null, priority = false } = {}) {
     if (key) { if (this.said.has(key)) return; this.said.add(key); }
-    const item = { from, text, voice };
+    const item = { hunter, tokens: ['hunter', `n${hunter.i + 1}`, ',', ...tokens], at: performance.now() / 1000, mode: hunter.mode };
     priority ? this.queue.unshift(item) : this.queue.push(item);
+    if (this.queue.length > 4) this.queue.length = 4; // radio discipline: old chatter gets dropped
   }
 
   update(game, now) {
-    const P = game.player, t = game.time;
-    if (t > 1.5) this.say('OPS', `Exfil, ops. Data's on the drive. ${game.hunters.length} hunters scrambled to your roof. Get seven hundred metres clear of all of them.`, { key: 'brief' });
-    // are they on you?
-    const onYou = game.hunters.some(h => h.d.alive && h.sensors.track(P, t, 1.0));
-    if (onYou && !this.tracked) {
-      this.say('OPS', this.said.has('first-track') ? 'They have you again. Break line of sight.' : 'They have you. Break line of sight, get down into the streets.', { key: this.said.has('first-track') ? null : 'first-track' });
-      this.said.add('first-track'); this.lostAt = null;
+    const P = game.player, t = game.time, H = game.hunters, live = H.filter(h => h.d.alive);
+    const st = h => { if (!this.st.has(h)) this.st.set(h, { mode: h.mode, hull: h.d.hull, alive: h.d.alive, fired: false }); return this.st.get(h); };
+    // the first two hunters check in on the way to the roof
+    if (t > 2) live.slice(0, 2).forEach((h, k) => this.tx(h, k ? ['copy', ',', 'enroute'] : ['enroute'], { key: `enroute${k}` }));
+    // a hunter takes the lead on the shared track: contact report
+    const link = game.link && t - game.link.t < 1.0 ? game.link : null;
+    if (link && link.by !== this.lead && link.by.d.alive) {
+      const h = link.by, src = { RADAR: 'radar_contact', CAMERA: 'visual', ACOUSTIC: 'acoustic' }[link.src] ?? 'radar_contact';
+      const r = dist(h.d.pos, P.pos);
+      this.tx(h, [this.linkLive ? 'new_lead' : src, ',', 'bearing', ...digits(compass(h.d.pos, P.pos)), ',', 'range', ...rangeTokens(r), ',', 'converge'], { priority: !this.linkLive });
+      const mate = live.filter(x => x !== h).sort((a, b) => dist(a.d.pos, h.d.pos) - dist(b.d.pos, h.d.pos))[0];
+      if (mate && !this.linkLive) this.tx(mate, ['wilco']);
+      this.lead = h; this.linkLive = true; this.lostAt = null;
     }
-    if (!onYou && this.tracked) this.lostAt = t;
-    if (this.lostAt !== null && t - this.lostAt > 4) { this.say('OPS', "You're off their scopes. Stay low and keep moving."); this.lostAt = null; }
-    this.tracked = onYou;
-    // the hunters' net: overheard, garbled
-    if (game.link && game.link.by !== this.linkBy && t - game.link.t < 0.5) {
-      this.linkBy = game.link.by;
-      const b = Math.round(((Math.atan2(P.pos.x - game.link.by.d.pos.x, P.pos.z - game.link.by.d.pos.z) * 180 / Math.PI) + 360) % 360);
-      this.say('HUNTER NET', `${game.link.by.d.name}: contact, bearing ${b}, ${Math.round(dist(P.pos, game.link.by.d.pos))} metres. All units converge.`, { voice: false });
+    // the net loses you
+    if (!link && this.linkLive) { this.linkLive = false; this.lostAt = t; if (this.lead?.d.alive) this.tx(this.lead, ['lost', ',', 'searching']); this.lead = null; }
+    if (this.lostAt !== null && t - this.lostAt > 6) {
+      const h = live.find(x => x.mode === 'SEARCH'); if (h) this.tx(h, ['climbing']); this.lostAt = null;
     }
-    // progress (ops can see it on their map)
-    const clear = game.escapeDist;
-    if (this.milestone === 0) this.milestone = Math.max(1, ...[300, 450, 600].filter(m => clear >= m)); // only progress from where you start counts
-    for (const m of [300, 450, 600]) if (clear >= m && this.milestone < m && game.status === 'play' && this.said.has('brief')) { this.milestone = m; this.say('OPS', `${m} metres clear of the nearest hunter. Keep going.`); }
-    // damage, battery
-    if (P.hull < 100) this.say('OPS', "You're hit. Watch your hull.", { key: 'hit' });
-    P.rotors.forEach((r, k) => { if (r.health < 0.5 && r.health > 0) this.say('OPS', `Rotor ${words(k + 1)} is losing thrust. Fly gentle.`, { key: `rotor${k}` }); });
-    if (P.battery.leakW) this.say('OPS', "A cell's punctured, you're bleeding power.", { key: 'leak' });
-    if (P.soc < 0.3) this.say('OPS', 'Battery thirty percent.', { key: 'bat30' });
-    if (P.soc < 0.15) this.say('OPS', 'Battery fifteen percent. Put it down somewhere soon.', { key: 'bat15' });
-    // kills
-    const alive = game.hunters.filter(h => h.d.alive).length;
-    if (this.alive !== null && alive < this.alive && game.status === 'play') this.say('OPS', `Splash one. ${alive} left.`, { priority: true });
-    this.alive = alive;
-    // helicopter wash
-    if (game.helis.some(h => dist(h.pose.p, P.pos) < 60 && h.pose.p.y > P.pos.y)) this.say('OPS', 'Helo overhead, watch the downwash.', { key: `heli${Math.floor(t / 30)}` });
-    // endings
-    if (game.status === 'downed') this.say('OPS', "Exfil's down. We lost the package.", { key: 'downed', priority: true });
-    if (game.status === 'escaped') this.say('OPS', "You're clear. Package is out. Good work.", { key: 'end', priority: true });
-    if (game.status === 'hunters-down') this.say('OPS', 'All hunters down. Bring it home.', { key: 'end', priority: true });
-    // play the next message when the channel is free
+    for (const h of H) {
+      const s = st(h);
+      if (h.d.firing && !s.fired) { s.fired = true; this.tx(h, ['engaging']); }
+      if (h.mode !== 'CHASE') s.fired = false;
+      if (h.d.hull < s.hull && h.d.alive && !s.hitSaid) { s.hitSaid = true; this.tx(h, ['im_hit'], { priority: true }); }
+      if (s.alive && !h.d.alive) {
+        if (h.d.landed) this.tx(h, ['low_battery']);
+        else { const m = live.sort((a, b) => dist(a.d.pos, h.d.pos) - dist(b.d.pos, h.d.pos))[0]; if (m) this.tx(m, ['hunter', `n${h.i + 1}`, 'is_down', ',', 'taking_fire'], { priority: true }); }
+      }
+      if (/line of fire/.test(h.thought) && !(s.checkAt > t - 20)) { s.checkAt = t; this.tx(h, ['check_fire']); }
+      s.hull = h.d.hull; s.alive = h.d.alive; s.mode = h.mode;
+    }
+    // endgame
+    if (game.status === 'downed') { const c = live.find(h => h.mode === 'CONFIRM'); if (c) this.tx(c, ['target_down'], { key: 'down', priority: true }); }
+    if (game.ended && (game.status === 'destroyed' || game.status === 'battery')) { const c = live[0]; if (c) this.tx(c, ['confirmed', ',', 'out'], { key: 'confirmed', priority: true }); }
+    if (game.status === 'escaped') { const c = live[0]; if (c) this.tx(c, ['going_dark', ',', 'out'], { key: 'escaped', priority: true }); }
+    // key the next transmission when the channel is free; you get a DF bearing on whoever keyed it
+    this.df = this.df.filter(d => now - d.at < 6);
     if (this.queue.length && now > this.busyUntil) {
       const m = this.queue.shift();
-      this.audio.radio(m.text, { voice: m.voice });
-      this.busyUntil = now + 1.2 + m.text.length * 0.06;
-      this.log(m.from, m.text);
+      // stale chatter is never sent: too old, or the hunter has moved on to something else
+      if (now - m.at > 7 || (m.tokens.includes('enroute') && m.hunter.mode !== 'TRANSIT')) return;
+      if (game.status !== 'play' && !m.tokens.some(k => ['target_down', 'confirmed', 'going_dark'].includes(k))) return; // once it's decided, only the endgame calls
+      if (!m.hunter.d.alive && !m.hunter.d.landed && m.tokens[3] !== 'hunter') return;
+      const d = dist(m.hunter.d.pos, P.pos), err = (Math.random() - 0.5) * 2 * (3 + d / 120);
+      const quality = Math.max(0.15, 1 - d / 1600);
+      const dur = this.audio.transmit(m.tokens, { quality }) ?? 2;
+      this.busyUntil = now + dur + 0.6;
+      const brg = (compass(P.pos, m.hunter.d.pos) + err + 360) % 360;
+      this.df.push({ bearing: brg, at: now, name: m.hunter.d.name });
+      this.log('INTERCEPT', `${say(m.tokens)}`, `DF ${String(Math.round(brg)).padStart(3, '0')}°`);
     }
   }
 }

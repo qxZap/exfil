@@ -23,3 +23,10 @@ Attribution text (show this in the game's credits or README):
 | `props/rooftop/detail-tank.glb`, `water-tower.glb`, `chimney-small.glb`, `solar-panel-flat.glb`, `props/rooftop/Textures/colormap.png` | https://kenney.nl/assets/city-kit-industrial (2.0) | Kenney (www.kenney.nl) | CC0 1.0 |
 
 Kenney asks for optional credit to "Kenney" or "www.kenney.nl"; it is not required.
+
+## Radio voice (assets/radio/*.wav)
+
+Generated with [Piper](https://github.com/OHF-Voice/piper1-gpl) using the voice `en_US-joe-medium`
+(https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/joe/medium). Its model card says
+"License: CC0" (dataset: https://github.com/OHF-Voice/voice-datasets). 65 short clips (callsigns, digits,
+hunter-net phrases), stitched together at runtime and played through a CB-radio filter.

@@ -150,16 +150,18 @@ function buildCity(world, r) {
 }
 
 // Cars: follow the road grid, wrap at the city edge. Pure functions of time.
-function makeCars(r, count = 360) {
-  const n = Math.round(2 * CITY.half / CITY.pitch);
-  return Array.from({ length: count }, () => ({
-    axis: r() < 0.5 ? 'x' : 'z',
-    line: -CITY.half + CITY.pitch * Math.floor(r() * (n + 1)),
-    dir: r() < 0.5 ? 1 : -1,
-    speed: 8 + r() * 9,
-    phase: r() * 4000,
-    color: r(),
-  }));
+// Traffic: every road has a lane each way; cars in a lane share the lane's speed and keep their
+// spacing, so nobody drives through anybody. ~14,000 cars on 136 lanes of 4 km.
+function makeCars(r, count = 14400) {
+  const r2 = rng(Math.floor(r() * 1e9)), n = Math.round(2 * CITY.half / CITY.pitch), cars = [];
+  const lanes = [];
+  for (let k = 0; k <= n; k++) for (const axis of ['x', 'z']) for (const dir of [1, -1]) lanes.push({ axis, line: -CITY.half + CITY.pitch * k, dir, speed: 8 + r2() * 7 });
+  const per = Math.floor(count / lanes.length), gap = 4000 / per;
+  for (const L of lanes) {
+    const off = r2() * gap;
+    for (let i = 0; i < per; i++) cars.push({ ...L, phase: off + i * gap + (r2() - 0.5) * gap * 0.4, color: r2() });
+  }
+  return cars;
 }
 export function carPose(c, t) {
   const along = ((c.phase + c.speed * t) % 4000 + 4000) % 4000 - 2000, s = along * c.dir, lane = 3.5 * c.dir;
@@ -727,6 +729,8 @@ export class Game {
     this.world.timestep = DT;
     this.city = buildCity(this.world, this.r);
     this.cars = makeCars(this.r);
+    this.lanes = new Map(); // "axis:line" -> cars, so collision checks only look at the road you're over
+    for (const c of this.cars) { const k = `${c.axis}:${c.line}`; if (!this.lanes.has(k)) this.lanes.set(k, []); this.lanes.get(k).push(c); }
     this.helis = makeHelis(this.world, this.r);
     this.weather = new Weather(this.r);
     // the server: on the roof of the tallest tower near the centre
@@ -775,6 +779,16 @@ export class Game {
       if (rr < 25 && p.y > f.y && p.y < f.y + 150) w = add(w, v3(0, 5 * (1 - rr / 25), 0));
     }
     return w;
+  }
+
+  // cars on the road(s) under point p
+  carsNear(p) {
+    const snap = v => -CITY.half + CITY.pitch * Math.round((v + CITY.half) / CITY.pitch);
+    const out = [];
+    const lz = snap(p.z), lx = snap(p.x);
+    if (Math.abs(p.z - lz) < 6) out.push(...(this.lanes.get(`x:${lz}`) ?? []));
+    if (Math.abs(p.x - lx) < 6) out.push(...(this.lanes.get(`z:${lx}`) ?? []));
+    return out;
   }
 
   // tallest roof within r metres of (x, z): the city is static, so a few downward rays will do
@@ -827,7 +841,7 @@ export class Game {
     this.stats.flown += dist(before, P.pos);
     // impacts: buildings, ground, helicopters, cars (cars are analytic, check only near the street)
     for (const d of this.drones) {
-      if (d.pos.y < 3) for (const c of this.cars) {
+      if (d.pos.y < 3) for (const c of this.carsNear(d.pos)) {
         const cp = carPose(c, this.time);
         const ax = c.axis === 'x' ? 2.3 : 1.0, az = c.axis === 'x' ? 1.0 : 2.3;
         if (Math.abs(d.pos.x - cp.x) < ax && Math.abs(d.pos.z - cp.z) < az && d.pos.y < 1.6) {

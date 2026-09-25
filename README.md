@@ -25,7 +25,8 @@ npm start          # → http://localhost:8080
 | `G` (hold) | power cut: motors to idle, drop at ~13 m/s while staying level; release to catch yourself (~6 m) |
 | `B` | intercepted hunter telemetry: what the hunters are thinking |
 | `K` | show / hide the on-screen controls panel |
-| `M` / `N` | sound on/off · operator voice on/off (radio squelch and beeps stay, speech turns into garbled radio) |
+| `M` / `N` | sound on/off · intercept receiver on/off |
+| `-` / `=` | volume (the start screen has Volume and Enemy radio sliders, remembered) |
 | `R` | restart the same city (any time, or on the end screen); `Enter` on the end screen: new city |
 
 **Flight modes**, like a real flight controller:
@@ -50,13 +51,16 @@ While you're flying, the game takes every key, so browser shortcuts like Ctrl+S 
 
 ## Look and feel
 
+- **Time of day:** Dawn, Day, Dusk or Night on the start screen, and optionally a **running clock** (1 hour per 2 minutes). The sun, or at night the moon, is the shadow-casting light, so shadows are live and move across the city as the clock runs. Nights have stars, a moon, lit windows, glowing street lamps with light pools on the road, and car head- and taillights.
+- **Traffic:** about 14,300 cars in lanes (every road, both directions). Cars in a lane share its speed and keep at least 20 m apart. Full 3D models are drawn within 320 m, simple boxes out to the haze. Updating all of them costs under 1 ms per frame.
+
 - **Sky and light:** a physically based sky (Rayleigh/Mie scattering) with a low sun through haze. It is also baked into an environment map, so glass and metal reflect it. ACES tone mapping and distance haze.
-- **Shadows:** four cascades, sharp at your drone and still present 900 m out.
+- **Shadows:** four cascades, sharp at your drone and still present 900 m out, with normal-offset biasing (no striping on walls).
 - **Procedural facades from world position** (no textures): floors and slab lines, window grids that vary per building (ribbon glass to punched windows), reflective glass, lit rooms, blown-out panes, weathering, gravel roofs, and shopfronts with awnings at street level.
 - **Streets:** worn asphalt, sidewalks, dashed centre lines, and patchy ground with scorch marks.
 - **Rooftop clutter:** AC units, water towers and masts with blinking aviation lights. These are real colliders.
 - **Street lights:** real colliders every 60 m.
-- **Cars:** 360 of them, in 7 models (sedan, SUV, van, truck, delivery, taxi, the odd police car), driving the grid.
+- **Cars:** 7 models (sedan, SUV, van, truck, delivery, taxi, the odd police car).
 - **Pedestrians:** about 520 people walk the sidewalks around you or stand about. When a drone comes in low or rounds hit near the street, they run away from it, then calm down.
 - **Performance:** everything repeated is GPU-instanced. The whole city is about 850 draw calls with 27 hunters, at 220+ FPS on an RTX 4080.
 
@@ -73,10 +77,15 @@ All of it is synthesized live with Web Audio (no sound files) and driven by the 
   - Near misses: rounds passing within 5 m of you snap (supersonic crack).
   - Ricochets whine, hits on your airframe clank, and impacts thud.
 - **Environment:** wind that grows with your airspeed through the air, a city hum that fades as you climb, and a war going on around you. That means artillery booms and distant machine-gun bursts echoing off the city (convolution reverb), and sirens drifting across town.
-- **Radio:**
-  - Your operator (OPS) briefs you and calls out when you're tracked, when you lose them, distance milestones, hits, rotor damage, punctured cells, battery warnings, kills, and helicopter downwash. The voice is the browser's text-to-speech, wrapped in squelch and a roger beep.
-  - You overhear the **hunter net** too, as garbled radio talk, whenever a new hunter takes the lead on your track.
-  - Everything said shows in the radio log.
+- **Enemy radio, intercepted:** nobody helps you. All you hear is the hunters' own net, and what they say is what their AI is actually doing:
+  - contact reports with sensor, bearing and range ("Hunter 9, radar contact, bearing 1-niner-3, range 4 hundred, all units converge"), and "wilco" from wingmen;
+  - "lost contact, searching last known", then "climbing to search altitude";
+  - "engaging" and "check fire, friendly in line";
+  - "I'm hit", and "Hunter 7 is down, taking fire";
+  - "low battery, landing";
+  - "target is down, moving to confirm" and "confirmed".
+- **How the radio sounds:** the voice is real recorded speech (a CC0 Piper voice, 65 clips), stitched live through a **CB-radio chain**: 400 Hz high-pass, 2.6 kHz low-pass, mid "honk", overdrive, carrier hiss, squelch burst and "kssht" tail. Distant transmitters are weaker, with more hiss and fading.
+- **Direction finding:** every transmission gives you a **DF bearing** toward the hunter who keyed the mic, drawn on your radar for 6 s with realistic error (worse at range). You can find them by listening, even when your sensors can't see them.
 
 ## The drone
 
@@ -159,6 +168,7 @@ The autopilot player is a simple flee-and-stay-low script, so a human who uses t
 
 3D models are in `assets/models`, with the full list in [`assets/models/CREDITS.md`](assets/models/CREDITS.md):
 
+- Radio voice: Piper `en_US-joe-medium` (CC0), 65 generated clips in `assets/radio`.
 - "Drone" by NateGazzard (https://poly.pizza/m/DNbUoMtG3H), licensed under CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/). Modified: rotor nodes re-pivoted to their hub centres.
 - Helicopter by kazuma (CC0), modified so the main rotor is a separate node.
 - Cars, trees, street lights and water towers by Kenney (www.kenney.nl), CC0.
@@ -173,6 +183,6 @@ The autopilot player is a simple flee-and-stay-low script, so a human who uses t
 | [`models.js`](models.js) | Loads the glTF models; bakes them for instancing; live clones with spinning rotors |
 | [`people.js`](people.js) | The pedestrian crowd |
 | [`audio.js`](audio.js) | Synthesized sound: rotors, Doppler, gunfire at the speed of sound, wind, city, war, radio |
-| [`radio.js`](radio.js) | The radio net: operator callouts and the overheard hunter net |
+| [`radio.js`](radio.js) | The intercepted enemy radio net and direction finding |
 | [`test-sim.mjs`](test-sim.mjs) | Headless test bench and Monte Carlo |
 | [`serve.mjs`](serve.mjs) | Zero-dependency static server |
