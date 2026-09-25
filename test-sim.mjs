@@ -114,6 +114,20 @@ function place(g, d, p) { d.body.setTranslation(p, true); d.body.setLinvel(v3(),
   check('lost track -> climbs and searches', modes.has('SEARCH') && maxY > 135, `modes ${[...modes].join('/')}, climbed to ${maxY.toFixed(0)} m to look down`);
 }
 
+// 6b. can't fly any more -> DOWNED: the hunter comes all the way in, and only then it's over
+for (const [label, cripple] of [['rotor shot off', P => { P.rotors[2].health = 0; }], ['battery dead', P => { P.battery.wh = 0; }]]) {
+  const g = await open({ hunters: 1 }), P = g.player;
+  place(g, P, v3(g.server.x + 60, 40, g.server.z + 60));
+  cripple(P);
+  let downedAt = null, endAt = null, closest = Infinity;
+  for (let i = 0; i * DT < 150 && !g.ended; i++) {
+    for (const e of g.step(hoverCmd)) { if (e.type === 'downed') downedAt = g.time; if (e.type === 'end') endAt = g.time; }
+    if (downedAt !== null) closest = Math.min(closest, dist(g.hunters[0].d.pos, P.pos));
+  }
+  check(`downed (${label}) -> hunter confirms`, downedAt !== null && endAt !== null && closest < 8 && g.hunters[0].mode === 'CONFIRM',
+    `downed at ${downedAt?.toFixed(1)} s, hunter came within ${closest.toFixed(1)} m, game over at ${endAt?.toFixed(1) ?? 'never'} s (${g.status})`);
+}
+
 // 7. Monte Carlo: an autopilot player tries to escape; the hunter must never fly into anything
 const SEEDS = +process.env.SEEDS || 4;
 let crashes = 0;
@@ -123,7 +137,7 @@ for (const diff of Object.keys(DIFFICULTY)) {
   for (let seed = 1; seed <= SEEDS; seed++) {
     const g = await Game.create({ seed: seed * 7 + diff.length, difficulty: diff, hunters: 1 });
     const ev = new Evader(g), H = g.hunters[0];
-    for (let i = 0; i * DT < 150 && g.status === 'play'; i++) {
+    for (let i = 0; i * DT < 150 && !g.ended; i++) {
       const t = i * DT;
       const evs = g.step(t < 1 ? { v: v3(), vz: 4, heading: 0 } : ev.command(t));
       for (const e of evs) if (e.type === 'impact' && e.who === H.d) hunterImpacts++;

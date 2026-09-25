@@ -9,6 +9,7 @@ export const DT = 1 / 120;
 export const G = 9.81;
 export const RHO = 1.225;           // air density (kg/m³)
 export const ESCAPE_DIST = 700;     // get this far from every hunter and you're out
+export const CONFIRM_DIST = 8;      // once you're downed, a hunter this close ends it
 
 // collision groups: membership << 16 | filter
 const WORLD = 1, DRONE = 2, AIRCRAFT = 4;
@@ -501,6 +502,13 @@ export class Hunter {
     const g = this.g, d = this.d, me = d.pos, target = g.player;
     if (!d.alive) { this.mode = 'DOWN'; this.thought = 'Lost power.'; d.firing = false; return d.control({ v: v3(), vz: -5, heading: d.heading }, dt); }
     this.sensors.update([target], t, g.r);
+    if (g.status === 'downed') { // you're down and it knows where you fell: go and confirm, low and slow
+      this.mode = 'CONFIRM'; d.firing = false;
+      const tp = target.pos, r = dist(me, tp);
+      this.sensors.lookDir = norm(sub(tp, me));
+      this.thought = `Target is down. Closing in to confirm, ${Math.round(r)} m.`;
+      return d.control(this.nav.steer(add(tp, v3(0, 3, 0)), r > 60 ? 45 : 8, t, { helis: g.helis.map(h => h.pose.p), minAgl: 1.5, heading: headingOf(sub(tp, me)) }), dt);
+    }
     const trk = this.sensors.track(target, t, 1.0);
     const helis = g.helis.map(h => h.pose.p);
     let cmd, fire = false, aimAt = null;
@@ -627,6 +635,16 @@ export class Game {
     return w;
   }
 
+  // can the player still fly? null if yes, else the reason
+  crippled(P) {
+    if (!P.alive) return 'destroyed';
+    if (P.battery.wh <= 0) return 'battery';
+    const lift = P.rotors.reduce((s, _, i) => s + P.tMax(i), 0);
+    if (P.rotors.some(r => r.health < 0.05)) return 'destroyed';          // an X-quad can't hold attitude on three
+    if (lift < 1.1 * P.mass * G) return 'destroyed';                        // not enough thrust left to climb
+    return null;
+  }
+
   // closest nearest-hunter distance (only hunters still flying count)
   get escapeDist() {
     const live = this.hunters.filter(h => h.d.alive);
@@ -671,14 +689,24 @@ export class Game {
       if (dv) events.push({ type: 'impact', who: d, dv });
     }
     this.flyRounds(dt, events);
-    // outcome
+    // outcome. A drone that can no longer fly is DOWNED, not dead yet: the hunters close in to
+    // confirm, and the game ends when one is right on top of you.
+    const live = this.hunters.filter(h => h.d.alive);
     if (this.status === 'play') {
-      if (!P.alive || (P.pos.y < 0.6 && P.rotors.every(r => r.health < 0.3))) this.status = 'destroyed';
-      else if (P.battery.wh <= 0) this.status = 'battery';
-      else if (this.hunters.every(h => !h.d.alive)) this.status = 'hunters-down';
+      const why = this.crippled(P);
+      if (why) {
+        this.status = 'downed'; this.downedWhy = why; this.downedAt = this.time;
+        events.push({ type: 'downed', why });
+      } else if (!live.length) this.status = 'hunters-down';
       else if (this.escapeDist >= ESCAPE_DIST) this.status = 'escaped';
-      if (this.status !== 'play') events.push({ type: 'end', status: this.status });
     }
+    if (this.status === 'downed') {
+      const close = live.length ? Math.min(...live.map(h => dist(h.d.pos, P.pos))) : 0;
+      this.closing = close;
+      // nobody left to come for you, or they can't get to where you fell: it's over anyway
+      if (close < CONFIRM_DIST || this.time - this.downedAt > 90) this.status = this.downedWhy;
+    }
+    if (this.status !== 'play' && this.status !== 'downed' && !this.ended) { this.ended = true; events.push({ type: 'end', status: this.status }); }
     this.events = events;
     return events;
   }

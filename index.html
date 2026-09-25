@@ -100,7 +100,7 @@
       <kbd>Mouse</kbd><span>look / aim (click to capture) · hold left button to fire</span>
       <kbd>W A S D</kbd><span>tilt: tap for a little, hold for more · <kbd>Shift</kbd> gentle</span>
       <kbd>Q / E</kbd><span>yaw left / right</span>
-      <kbd>Space / Ctrl</kbd><span>climb / descend (<kbd>X</kbd> also descends)</span>
+      <kbd>Space / X</kbd><span>climb / descend</span>
       <kbd>F</kbd><span>flight mode: ANGLE (self-levels) · ACRO (flips, rolls, manual throttle) · ASSIST (brakes to a hover)</span>
       <kbd>C</kbd><span>first / third person · <kbd>B</kbd> intercepted hunter telemetry</span>
       <kbd>Esc</kbd><span>release the mouse</span>
@@ -337,11 +337,13 @@ addEventListener('mousedown', e => { if (e.button === 0 && document.pointerLockE
 addEventListener('mouseup', e => { if (e.button === 0) input.firing = false; });
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
+  // while flying, keys belong to the game: no Ctrl+S/Ctrl+D/space-scroll/F-find etc.
+  // (Ctrl+W and Ctrl+T can't be blocked by any web page, which is why nothing uses Ctrl)
+  if (running && (e.ctrlKey || e.metaKey || e.altKey || !['f5', 'f11', 'f12', 'escape'].includes(k))) e.preventDefault();
   input.keys.add(k);
   if (k === 'v' || k === 'c') input.cam = input.cam === 'chase' ? 'nose' : 'chase';
   if (k === 'f') { input.mode = MODES[(MODES.indexOf(input.mode) + 1) % MODES.length]; toast(`${input.mode.toUpperCase()} MODE`); }
   if (k === 'b') { input.intel = !input.intel; $('intel').style.display = input.intel ? 'block' : 'none'; }
-  if (k === ' ' || k === 'control') e.preventDefault();
 });
 addEventListener('keyup', e => input.keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => { input.keys.clear(); input.firing = false; });
@@ -354,7 +356,7 @@ function playerCommand(dt) {
   const fx = (held('w', 'arrowup') ? 1 : 0) - (held('s', 'arrowdown') ? 1 : 0);
   const rx = (held('d', 'arrowright') ? 1 : 0) - (held('a', 'arrowleft') ? 1 : 0);
   const yawKey = (held('q') ? 1 : 0) - (held('e') ? 1 : 0); // +heading = turn left
-  const up = (held(' ') ? 1 : 0) - (held('control', 'x') ? 1 : 0);
+  const up = (held(' ') ? 1 : 0) - (held('x') ? 1 : 0);
   const gentle = held('shift') ? 0.35 : 1;
   input.stick.fwd = ramp(input.stick.fwd, fx * gentle, dt);
   input.stick.right = ramp(input.stick.right, rx * gentle, dt);
@@ -434,6 +436,13 @@ function hud() {
   const tracked = game.hunters.map(H => H.d.alive && H.sensors.track(game.player, t, 0.6)).filter(Boolean);
   const firing = game.hunters.some(H => H.d.firing);
   const rwr = $('rwr');
+  if (game.status === 'downed') {
+    rwr.style.display = 'block'; rwr.style.opacity = 1;
+    rwr.textContent = `DOWNED · HUNTER ${Math.round(game.closing ?? 0)} m`;
+    if (input.intel) $('intelText').innerHTML = game.hunters.map(H => `<p><b>${H.d.name}</b> · ${H.mode}<br>${H.thought}</p>`).join('');
+    drawRadar(t);
+    return;
+  }
   rwr.style.display = tracked.length || firing ? 'block' : 'none';
   rwr.textContent = firing ? '▲ UNDER FIRE ▲' : tracked.some(k => k.src === 'CAMERA') ? 'OPTICAL LOCK' : tracked.some(k => k.src === 'RADAR') ? 'RADAR TRACK' : 'HEARD';
   rwr.style.opacity = firing ? (Math.sin(t * 20) > 0 ? 1 : 0.35) : 1;
@@ -447,7 +456,10 @@ function gameOver(status) {
   running = false;
   document.exitPointerLock?.();
   const P = game.player, s = game.stats;
-  const titles = { escaped: ['EXFILTRATED', `You got ${ESCAPE_DIST} m clear of every hunter. The data is out.`], 'hunters-down': ['HUNTERS DOWN', 'You shot down every hunter.'], destroyed: ['SHOT DOWN', P.deathCause === 'impact' ? 'You flew into something.' : 'The hunter got you.'], battery: ['BATTERY DEAD', 'You ran out of power.'] };
+  const lostRotor = P.rotors.some(r => r.health < 0.05), found = game.hunters.some(H => H.d.alive) ? ' The hunter flew in to confirm.' : '';
+  const titles = { escaped: ['EXFILTRATED', `You got ${ESCAPE_DIST} m clear of every hunter. The data is out.`], 'hunters-down': ['HUNTERS DOWN', 'You shot down every hunter.'],
+    destroyed: ['SHOT DOWN', (P.deathCause === 'impact' ? 'You flew into something hard.' : lostRotor ? "You lost a rotor and couldn't stay in the air." : !P.alive ? 'The hunter shredded you.' : 'Too much damage to lift off again.') + found],
+    battery: ['BATTERY DEAD', 'You ran out of power and dropped.' + found] };
   const [title, why] = titles[status];
   $('overTitle').textContent = title; $('overTitle').style.color = status === 'escaped' || status === 'hunters-down' ? 'var(--hud)' : 'var(--bad)';
   $('overWhy').textContent = why;
@@ -475,6 +487,7 @@ function frame(now) {
         if (e.type === 'hit') { spark(e.p, e.who === game.player ? 1.2 : 0.8); if (e.who === game.player) toast(e.rotor >= 0 ? `ROTOR ${e.rotor + 1} HIT` : 'HULL HIT', '#ff4a4a'); else toast(`HIT ${e.who.name.toUpperCase()}`); }
         if (e.type === 'ricochet') spark(e.p, 0.5);
         if (e.type === 'impact' && e.who === game.player) toast(`IMPACT ${e.dv.toFixed(0)} m/s`, '#ffb020');
+        if (e.type === 'downed') toast(e.why === 'battery' ? 'BATTERY DEAD · YOU ARE DOWN' : 'YOU ARE DOWN', '#ff4a4a');
         if (e.type === 'end') gameOver(e.status);
       }
     }

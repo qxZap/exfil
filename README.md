@@ -18,7 +18,7 @@ npm start          # → http://localhost:8080
 | Mouse | look and aim (click to capture); hold left button to fire |
 | `W A S D` | tilt: a tap gives a little, holding ramps up to 60°. `Shift`: gentle |
 | `Q` / `E` | yaw left / right |
-| `Space` / `Ctrl` (or `X`) | climb / descend (in ACRO: throttle up / down) |
+| `Space` / `X` | climb / descend (in ACRO: throttle up / down) |
 | `F` | flight mode: **ANGLE** · **ACRO** · **ASSIST** |
 | `C` (or `V`) | third person / first person (FPV, bolted to the airframe, rolls with it) |
 | `B` | intercepted hunter telemetry: what the hunters are thinking |
@@ -37,7 +37,9 @@ Choose a difficulty and 1–3 hunters in the menu:
 | Hard | +20% | 460 m | 380 m | 0.7° |
 | Brutal | +25% | 520 m | 420 m | 0.5° |
 
-You win by getting 700 m from every hunter, or by shooting them all down. You lose if you're shot down, fly into something hard enough, or the battery runs flat.
+You win by getting 700 m from every hunter, or by shooting them all down. If your drone can't fly any more (a rotor is gone, too little thrust left, the battery is dead, or the hull is destroyed), you're **downed**. The hunters then fly in to confirm, and you lose when one is within 8 m.
+
+While you're flying, the game takes every key, so browser shortcuts like Ctrl+S don't fire. Nothing is bound to Ctrl, because no web page can block Ctrl+W.
 
 ## The drone
 
@@ -75,6 +77,7 @@ Your HUD shows only what *your* sensors know, including a heading-up radar scope
 ## The hunter's brain
 
 - **TRANSIT:** it was told where the server is, not where you are. It flies there at altitude.
+- **CONFIRM:** once you're downed, every hunter flies in, low and slow, to within 8 m of where you fell.
 - **CHASE:** once a sensor has you, it intercepts at the point where you'll be. Close in, it holds a firing standoff about 70 m out and 18 m above. It fires in bursts using a lead solution (your velocity, its own velocity, bullet drop).
 - **SEARCH:** when it loses you, it climbs to at least 140 m to look down over the rooftops, flies to where you'd be if you'd kept going, and spirals outward.
 - **Always:**
@@ -97,6 +100,8 @@ PASS  a destroyed rotor brings it down          fell 25 m in 4 s
 PASS  downwash under a hovering helicopter      air -10 m/s: pushed down 3.9 m in 2 s
 PASS  hunter finds + hits a sitting target      first hit at 18.4 s
 PASS  lost track -> climbs and searches         climbed to 185 m to look down
+PASS  downed (rotor shot off) -> hunter confirms  hunter came within 8 m, then game over
+PASS  downed (battery dead) -> hunter confirms    hunter came within 8 m, then game over
 PASS  Easy / Normal / Hard / Brutal games       hunter impacts 0 in every game
 ```
 
