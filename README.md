@@ -16,10 +16,17 @@ npm start          # → http://localhost:8080
 | | |
 |---|---|
 | Mouse | look and aim (click to capture); hold left button to fire |
-| `W A S D` | fly relative to where you're looking; let go to brake and hover. `Shift`: slow and precise |
-| `Space` / `C` | climb / descend |
-| `V` | chase cam / nose cam |
+| `W A S D` | tilt: a tap gives a little, holding ramps up to 60°. `Shift`: gentle |
+| `Q` / `E` | yaw left / right |
+| `Space` / `Ctrl` (or `X`) | climb / descend (in ACRO: throttle up / down) |
+| `F` | flight mode: **ANGLE** · **ACRO** · **ASSIST** |
+| `C` (or `V`) | third person / first person (FPV, bolted to the airframe, rolls with it) |
 | `B` | intercepted hunter telemetry: what the hunters are thinking |
+
+**Flight modes**, like a real flight controller:
+- **ANGLE** (default): the sticks set the tilt angle, so 15° tilt flies ~15 m/s. It self-levels when you let go but doesn't brake, so you glide. Altitude is held unless you climb or descend.
+- **ACRO**: the sticks set *rotation rates* (up to 260°/s), with no self-levelling and manual throttle around hover. Barrel rolls, flips, inverted dives: a full roll costs about 11 m of altitude.
+- **ASSIST**: GPS-style. The sticks set velocity, and it brakes to a hover when you let go. The hunters fly this way.
 
 Choose a difficulty and 1–3 hunters in the menu:
 
@@ -37,10 +44,10 @@ You win by getting 700 m from every hunter, or by shooting them all down. You lo
 It's a 2.0 kg X-quad. Each part is a collider with its own mass: frame, arms, a 0.7 kg battery slung under the frame, the gun and camera pod on the nose, and four motors with props.
 
 - **Four independent rotors.** Thrust = k·ω² × rotor health × battery sag (80–100% as charge drops). The motors have a 35 ms spin-up lag. Each rotor pushes at its own position, and its spin adds yaw reaction torque.
-- **Flight controller**, cascaded: velocity loop (with integral, so it holds position in wind) → tilt limited to 60° → attitude loop → a 4×4 mixer that solves per-rotor thrust. When a rotor saturates, it gives up yaw first to keep level.
+- **Flight controller**, cascaded: velocity loop (with integral, so it holds position in wind; ASSIST) or stick angle (ANGLE) or body rates (ACRO) → attitude loop → a 4×4 mixer that solves per-rotor thrust about the drone's **real centre of mass** (the nose pod shifts it forward). About 15% of thrust is kept in reserve so attitude control never runs out. When motors saturate, yaw is scaled down to whatever authority is left, not dropped. Yaw uses rate feedforward, so turns don't lag.
 - **Aerodynamics:** drag relative to the *air*, not the ground. That's how wind, gusts and downwash push you. Air pouring down through the prop discs (when climbing, or in downwash) unloads the props, per momentum theory.
 - **Battery:** 111 Wh (6S 5 Ah). Power is ideal momentum-theory power ÷ 62% efficiency, plus avionics. That gives **~30 min of hover** and ~10 min flat out at full speed (630 W).
-- **Top speed:** 28 m/s for you. The hunters' airframes have less drag, so their top speed scales exactly with difficulty.
+- **Top speed:** 27 m/s (97 km/h) at 60° tilt for you. The hunters' airframes have less drag, so their top speed scales exactly with difficulty.
 - **Damage:**
   - Hit zones are each prop disc and the core. Three hits kill a rotor.
   - A body hit can puncture a cell, which bleeds power, or crack the optics, which cuts sensor range.
@@ -80,18 +87,17 @@ Your HUD shows only what *your* sensors know, including a heading-up radar scope
 `npm test` runs the same simulation headless (`SEEDS=8 npm test` for more games):
 
 ```
-PASS  hover 60 s in gusty wind                  alt error ≤ 0.64 m, tilt ≤ 4.7°, 216 W
-PASS  hover endurance ≥ 20 min                  29.8 min of hover left after the test
-PASS  hunter top speed matches difficulty       easy 28.0 m/s (1.00×), normal 30.8 (1.10×), hard 33.6 (1.20×), brutal 35.0 (1.25×)
-PASS  hover with one rotor at 50%               alt error ≤ 0.26 m: the mixer re-balances the other three
-PASS  a destroyed rotor brings it down          fell 30 m in 4 s
+PASS  hover 60 s in gusty wind                  alt error ≤ 0.72 m, tilt ≤ 4.9°, 216 W
+PASS  hover endurance ≥ 20 min                  29.9 min of hover left after the test
+PASS  hunter top speed matches difficulty       easy 27.0 m/s (1.00×), normal 29.7 (1.10×), hard 32.4 (1.20×), brutal 33.7 (1.25×)
+PASS  ANGLE mode: tilt follows the stick        stick 0.25 → 15° | 0.5 → 30° | 1 → 60°
+PASS  ACRO mode: barrel roll                    inverted (up.y -1.00), back level (up.y 1.00), lost 11 m
+PASS  hover with one rotor at 50%               alt error ≤ 0.30 m: the mixer re-balances the other three
+PASS  a destroyed rotor brings it down          fell 25 m in 4 s
 PASS  downwash under a hovering helicopter      air -10 m/s: pushed down 3.9 m in 2 s
-PASS  hunter finds + hits a sitting target      first hit at 16.3 s
+PASS  hunter finds + hits a sitting target      first hit at 18.4 s
 PASS  lost track -> climbs and searches         climbed to 185 m to look down
-PASS  Easy   8 games vs autopilot player        hunter impacts 0 | escaped 3, destroyed 1, still going 4
-PASS  Normal 8 games vs autopilot player        hunter impacts 0 | destroyed 3, still going 5
-PASS  Hard   8 games vs autopilot player        hunter impacts 0 | destroyed 5, still going 3
-PASS  Brutal 8 games vs autopilot player        hunter impacts 0 | destroyed 6, still going 2
+PASS  Easy / Normal / Hard / Brutal games       hunter impacts 0 in every game
 ```
 
 The autopilot player is a simple flee-and-stay-low script, so a human who uses the buildings plays much better. Across 32 full games the hunters never flew into anything.

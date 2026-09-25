@@ -44,6 +44,27 @@ function place(g, d, p) { d.body.setTranslation(p, true); d.body.setLinvel(v3(),
   check('hunter top speed matches difficulty', worst < 0.03, out.map(o => `${o.k} ${o.vmax.toFixed(1)} m/s (${(o.vmax / base).toFixed(2)}×)`).join(', '));
 }
 
+// 2b. flight modes: ANGLE tilts in proportion to the stick; ACRO can barrel-roll and come back level
+{
+  const g = await open(), P = g.player;
+  const reset = () => { place(g, P, v3(-1500, 300, -1500)); P.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true); };
+  const rows = [];
+  for (const stick of [0.25, 0.5, 1]) {
+    reset();
+    for (let i = 0; i * DT < 10; i++) g.step({ mode: 'angle', tilt: { fwd: stick, right: 0 }, vz: 0, heading: 0 });
+    rows.push({ stick, tilt: Math.acos(P.up.y) * 57.3, speed: len(flat(P.vel)), alt: P.pos.y });
+  }
+  const ok = rows.every(r => Math.abs(r.tilt - r.stick * 60) < 3 && Math.abs(r.alt - 300) < 3) && rows[0].speed < rows[1].speed && rows[1].speed < rows[2].speed;
+  check('ANGLE mode: tilt follows the stick', ok, rows.map(r => `stick ${r.stick} → ${r.tilt.toFixed(0)}°, ${r.speed.toFixed(0)} m/s`).join(' | '));
+  reset();
+  const hover = P.mass * 9.81 / (4 * 20);
+  for (let i = 0; i * DT < 1; i++) g.step({ mode: 'acro', rates: { pitch: 0, roll: 0, yaw: 0 }, throttle: hover });
+  const y0 = P.pos.y; let minUp = 1;
+  for (let i = 0; i * DT < 2 * Math.PI / 4; i++) { g.step({ mode: 'acro', rates: { pitch: 0, roll: 4, yaw: 0 }, throttle: 0.75 }); minUp = Math.min(minUp, P.up.y); }
+  for (let i = 0; i * DT < 0.3; i++) g.step({ mode: 'acro', rates: { pitch: 0, roll: 0, yaw: 0 }, throttle: hover });
+  check('ACRO mode: barrel roll', minUp < -0.9 && P.up.y > 0.95, `inverted (up.y ${minUp.toFixed(2)}), back level (up.y ${P.up.y.toFixed(2)}), lost ${(y0 - P.pos.y).toFixed(0)} m`);
+}
+
 // 3. damage: half a rotor still flies; a lost rotor brings a quad down
 {
   const g = await open(), P = g.player;

@@ -213,9 +213,10 @@ const ROTORS = [ // local position (forward +Z, left +X), spin (+1 = CCW from ab
   { p: v3(-ARM, 0.03, -ARM), spin: +1 },
   { p: v3(+ARM, 0.03, -ARM), spin: -1 },
 ];
-// mixer: [collective, τx, τy, τz] = M · T  ->  T = M⁻¹ · [...]
-const MIX = (() => {
-  const M = [ROTORS.map(() => 1), ROTORS.map(r => -r.p.z), ROTORS.map(r => -r.spin * AIRFRAME.kq), ROTORS.map(r => r.p.x)];
+// mixer: [collective, τx, τy, τz] = M · T  ->  T = M⁻¹ · [...]; torques are about the real centre of
+// mass (the nose pod pulls it forward), otherwise equal thrust would pitch the nose down
+function makeMix(com) {
+  const M = [ROTORS.map(() => 1), ROTORS.map(r => -(r.p.z - com.z)), ROTORS.map(r => -r.spin * AIRFRAME.kq), ROTORS.map(r => r.p.x - com.x)];
   const n = 4, A = M.map((row, i) => [...row, ...Array.from({ length: n }, (_, j) => (i === j ? 1 : 0))]);
   for (let c = 0; c < n; c++) { // Gauss-Jordan
     let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
@@ -224,7 +225,7 @@ const MIX = (() => {
     for (let r = 0; r < n; r++) if (r !== c) { const f = A[r][c]; for (let k = 0; k < 2 * n; k++) A[r][k] -= f * A[c][k]; }
   }
   return A.map(row => row.slice(n));
-})();
+}
 
 export class Drone {
   constructor(world, { pos, heading = 0, team, speed = 1, name }) {
@@ -242,6 +243,7 @@ export class Drone {
     part(RAPIER.ColliderDesc.cuboid(0.04, 0.04, 0.05).setTranslation(0, -0.06, 0.13), 0.25);   // gun + camera pod
     for (const r of ROTORS) part(RAPIER.ColliderDesc.cylinder(0.012, AIRFRAME.propR).setTranslation(r.p.x, r.p.y, r.p.z), 0.08); // motor + prop
     this.mass = this.body.mass();
+    this.mixM = makeMix(this.body.localCom());
     // principal inertia comes in the principal frame, not the body frame: for a flat quad the
     // biggest one is yaw, the other two are roll/pitch
     const I = this.body.principalInertia(), s = [I.x, I.y, I.z].sort((a, b) => a - b);
@@ -265,39 +267,63 @@ export class Drone {
   get muzzle() { return this.part(v3(0, -0.06, 0.2)); }
   rotorWorld(i) { return this.part(this.rotors[i].p); }
 
-  // ---------- flight controller: velocity command -> tilt -> attitude -> per-rotor thrust ----------
-  // cmd = { v: desired horizontal velocity (world), vz: desired climb rate, heading: desired yaw }
+  // ---------- flight controller ----------
+  // Three modes, like a real FC:
+  //  'assist' (default for cmd without mode; the AI): { v, vz, heading } velocity hold, brakes to a hover
+  //  'angle':  { tilt: {fwd, right} in -1..1 of max tilt, vz, heading } self-levelling, no auto-brake
+  //  'acro':   { rates: {pitch, roll, yaw} rad/s, throttle 0..1 } no self-levelling: flips and rolls
   control(cmd, dt) {
-    const v = this.vel, m = this.mass, q = this.q, up = this.up;
-    // 1. horizontal: velocity loop with a little integral (holds position against wind)
-    const ev = v3(cmd.v.x - v.x, 0, cmd.v.z - v.z);
-    this.velI = mul(add(this.velI, mul(ev, dt)), 0.999);
-    if (len(this.velI) > 6) this.velI = mul(norm(this.velI), 6);
-    let a = add(mul(ev, 1.6), mul(this.velI, 0.35));
-    const aMax = G * Math.tan(AIRFRAME.maxTilt);
-    if (len(a) > aMax) a = mul(norm(a), aMax);
-    // 2. vertical
-    const evz = cmd.vz - v.y;
-    this.vzI = clamp((this.vzI ?? 0) * 0.999 + evz * dt, -4, 4);
-    const az = clamp(3.2 * evz + 1.2 * this.vzI, -0.85 * G, 14);
-    const F = v3(m * a.x, m * (G + az), m * a.z);
-    let upD = norm(F);
-    if (upD.y < Math.cos(AIRFRAME.maxTilt)) { const h = norm(flat(upD)); upD = add(mul(h, Math.sin(AIRFRAME.maxTilt)), v3(0, Math.cos(AIRFRAME.maxTilt), 0)); }
-    const collective = Math.max(0, dot(F, up));
-    // 3. attitude: rotate current up onto desired up; yaw toward the commanded heading
-    const qi = conj(q);
-    const eAtt = rot(qi, cross(up, upD));
-    const eYaw = wrapPi(cmd.heading - this.heading);
-    const w = rot(qi, this.body.angvel());
-    const I = this.inertia, KP = 150, KD = 20;
-    const tau = v3(I.x * (KP * eAtt.x - KD * w.x), I.y * (6 * eYaw - 4 * w.y), I.z * (KP * eAtt.z - KD * w.z));
-    // 4. mixer; if a rotor saturates, give up yaw authority first (keeping level matters more)
-    let T = this.mix(collective, tau);
-    if (T.some((t, i) => t < 0 || t > this.tMax(i))) T = this.mix(collective, v3(tau.x, 0, tau.z));
-    this.cmdThrust = T.map((t, i) => clamp(t, 0, this.tMax(i)));
+    const v = this.vel, m = this.mass, q = this.q, up = this.up, qi = conj(q);
+    const w = rot(qi, this.body.angvel()), I = this.inertia;
+    let collective, tau;
+    if (cmd.mode === 'acro') {
+      // body rates: +x = pitch nose-down, +z = roll right, +y = yaw left
+      const r = cmd.rates;
+      tau = v3(I.x * 22 * (r.pitch - w.x), I.y * 10 * (r.yaw - w.y), I.z * 22 * (r.roll - w.z));
+      collective = clamp(cmd.throttle, 0, 1) * 4 * AIRFRAME.maxThrust;
+    } else {
+      let upD, az;
+      const evz = cmd.vz - v.y;
+      this.vzI = clamp((this.vzI ?? 0) * 0.999 + evz * dt, -4, 4);
+      az = clamp(3.2 * evz + 1.2 * this.vzI, -0.85 * G, 14);
+      if (cmd.mode === 'angle') {
+        const tp = clamp(cmd.tilt.fwd, -1, 1) * AIRFRAME.maxTilt, tr = clamp(cmd.tilt.right, -1, 1) * AIRFRAME.maxTilt;
+        upD = norm(add(add(mul(fwdOf(cmd.heading), Math.tan(tp)), mul(rightOf(cmd.heading), Math.tan(tr))), v3(0, 1, 0)));
+        this.velI = v3();
+      } else {
+        // horizontal: velocity loop with a little integral (holds position against wind)
+        const ev = v3(cmd.v.x - v.x, 0, cmd.v.z - v.z);
+        this.velI = mul(add(this.velI, mul(ev, dt)), 0.999);
+        if (len(this.velI) > 6) this.velI = mul(norm(this.velI), 6);
+        let a = add(mul(ev, 1.6), mul(this.velI, 0.35));
+        const aMax = G * Math.tan(AIRFRAME.maxTilt);
+        if (len(a) > aMax) a = mul(norm(a), aMax);
+        upD = norm(v3(a.x, G + az, a.z));
+      }
+      if (upD.y < Math.cos(AIRFRAME.maxTilt)) { const h = norm(flat(upD)); upD = add(mul(h, Math.sin(AIRFRAME.maxTilt)), v3(0, Math.cos(AIRFRAME.maxTilt), 0)); }
+      // enough thrust along the tilted axis to hold the commanded climb rate
+      const F = mul(upD, m * (G + az) / Math.max(upD.y, 0.35));
+      // keep ~15% thrust in reserve so the attitude loop never loses authority at full power
+      collective = clamp(dot(F, up), 0, 0.85 * this.rotors.reduce((sum, _, i) => sum + this.tMax(i), 0));
+      // attitude: rotate current up onto desired up; yaw toward the commanded heading
+      const eAtt = rot(qi, cross(up, upD));
+      const eYaw = wrapPi(cmd.heading - this.heading);
+      const KP = 150, KD = 20;
+      // yaw: position loop plus the turn rate you're asking for (feedforward), so it doesn't lag
+      tau = v3(I.x * (KP * eAtt.x - KD * w.x), I.y * (25 * eYaw + 9 * ((cmd.yawRate ?? 0) - w.y)), I.z * (KP * eAtt.z - KD * w.z));
+    }
+    // mixer: level + collective first; then as much of the yaw request as the motors have room for
+    const base = this.mix(collective, v3(tau.x, 0, tau.z)), yawPart = this.mix(0, v3(0, tau.y, 0));
+    let k = 1;
+    base.forEach((t, i) => {
+      const y = yawPart[i];
+      if (y > 0) k = Math.min(k, Math.max(0, (this.tMax(i) - t) / y));
+      if (y < 0) k = Math.min(k, Math.max(0, t / -y));
+    });
+    this.cmdThrust = base.map((t, i) => clamp(t + k * yawPart[i], 0, this.tMax(i)));
     this.cmd = cmd;
   }
-  mix(c, tau) { const b = [c, tau.x, tau.y, tau.z]; return MIX.map(row => row[0] * b[0] + row[1] * b[1] + row[2] * b[2] + row[3] * b[3]); }
+  mix(c, tau) { const b = [c, tau.x, tau.y, tau.z]; return this.mixM.map(row => row[0] * b[0] + row[1] * b[1] + row[2] * b[2] + row[3] * b[3]); }
   tMax(i) { return AIRFRAME.maxThrust * this.rotors[i].health * (0.82 + 0.18 * this.soc) * (this.battery.wh > 0 ? 1 : 0); }
 
   // ---------- physics: motors spin up, each rotor pushes at its own position, air drags ----------
@@ -620,7 +646,7 @@ export class Game {
     this.playerSensors.lookDir = input?.aim ?? fwdOf(P.heading);
     this.playerSensors.update(this.hunters.map(h => h.d), t, this.r);
     const inp = input ?? { v: v3(), vz: 0, heading: P.heading }; // no input: hover in place
-    P.control({ v: inp.v, vz: inp.vz, heading: inp.heading }, dt);
+    P.control(inp, dt);
     P.aim = inp.aim ?? fwdOf(P.heading);
     P.firing = !!inp.fire && P.alive;
     for (const h of this.hunters) h.think(t, dt);

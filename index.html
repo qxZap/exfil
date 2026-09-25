@@ -73,6 +73,7 @@
   <div class="row"><span class="lab">climb</span><span id="vz">0 m/s</span></div>
   <div class="row"><span class="lab">heading · tilt</span><span id="hdg">000° · 0°</span></div>
   <div class="row"><span class="lab">wind</span><span id="wind">0 m/s</span></div>
+  <div class="row"><span class="lab">mode (F)</span><span id="fmode" style="color:var(--hud)">ANGLE</span></div>
 </div>
 
 <div id="systems" class="panel">
@@ -97,9 +98,11 @@
     <div class="choices" id="count"><button data-v="1" class="sel">1</button><button data-v="2">2</button><button data-v="3">3</button></div>
     <div class="keys">
       <kbd>Mouse</kbd><span>look / aim (click to capture) · hold left button to fire</span>
-      <kbd>W A S D</kbd><span>fly (let go to brake and hover) · <kbd>Shift</kbd> precise, slow</span>
-      <kbd>Space / C</kbd><span>climb / descend</span>
-      <kbd>V</kbd><span>chase cam / nose cam · <kbd>B</kbd> intercepted hunter telemetry</span>
+      <kbd>W A S D</kbd><span>tilt: tap for a little, hold for more · <kbd>Shift</kbd> gentle</span>
+      <kbd>Q / E</kbd><span>yaw left / right</span>
+      <kbd>Space / Ctrl</kbd><span>climb / descend (<kbd>X</kbd> also descends)</span>
+      <kbd>F</kbd><span>flight mode: ANGLE (self-levels) · ACRO (flips, rolls, manual throttle) · ASSIST (brakes to a hover)</span>
+      <kbd>C</kbd><span>first / third person · <kbd>B</kbd> intercepted hunter telemetry</span>
       <kbd>Esc</kbd><span>release the mouse</span>
     </div>
     <button class="go" id="start">Take off</button>
@@ -114,7 +117,7 @@ import { Game, DT, RAPIER, CITY, carPose, v3, add, sub, mul, len, flat, norm, di
 
 const $ = id => document.getElementById(id);
 const canvas = $('view');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', logarithmicDepthBuffer: true }); // 4 km of depth: no z-fighting
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -194,11 +197,11 @@ function buildCityMeshes(game) {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x6f7563, roughness: 1 }));
   ground.receiveShadow = true; cityGroup.add(ground);
   const n = Math.round(2 * CITY.half / CITY.pitch) + 1;
-  const roads = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x3b3e42, roughness: 0.95 }), n * 2);
+  const roads = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x3b3e42, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), n * 2);
   for (let k = 0; k < n; k++) {
     const c = -CITY.half + k * CITY.pitch;
-    m4.makeScale(CITY.road, 1, CITY.half * 2 + CITY.road).setPosition(c, 0.03, 0); roads.setMatrixAt(k, m4);
-    m4.makeScale(CITY.half * 2 + CITY.road, 1, CITY.road).setPosition(0, 0.04, c); roads.setMatrixAt(n + k, m4);
+    m4.makeScale(CITY.road, 1, CITY.half * 2 + CITY.road).setPosition(c, 0.08, 0); roads.setMatrixAt(k, m4);
+    m4.makeScale(CITY.half * 2 + CITY.road, 1, CITY.road).setPosition(0, 0.12, c); roads.setMatrixAt(n + k, m4);
   }
   roads.receiveShadow = true; cityGroup.add(roads);
   // the server on the roof
@@ -295,7 +298,8 @@ function spark(p, size = 1) { const s = new THREE.Sprite(sparkMat.clone()); s.po
 
 // ---------------------------------------------------------------- game state
 let game, droneMeshes = [], settings = { difficulty: 'normal', hunters: 1, seed: 0 }, running = false;
-const input = { keys: new Set(), yaw: 0, pitch: -0.12, firing: false, cam: 'chase', intel: false };
+const input = { keys: new Set(), yaw: 0, pitch: -0.12, firing: false, cam: 'chase', intel: false, mode: 'angle', stick: { fwd: 0, right: 0 } };
+const MODES = ['angle', 'acro', 'assist'];
 
 async function start(seed) {
   $('loading').style.display = 'grid';
@@ -334,7 +338,8 @@ addEventListener('mouseup', e => { if (e.button === 0) input.firing = false; });
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   input.keys.add(k);
-  if (k === 'v') input.cam = input.cam === 'chase' ? 'nose' : 'chase';
+  if (k === 'v' || k === 'c') input.cam = input.cam === 'chase' ? 'nose' : 'chase';
+  if (k === 'f') { input.mode = MODES[(MODES.indexOf(input.mode) + 1) % MODES.length]; toast(`${input.mode.toUpperCase()} MODE`); }
   if (k === 'b') { input.intel = !input.intel; $('intel').style.display = input.intel ? 'block' : 'none'; }
   if (k === ' ' || k === 'control') e.preventDefault();
 });
@@ -342,17 +347,33 @@ addEventListener('keyup', e => input.keys.delete(e.key.toLowerCase()));
 addEventListener('blur', () => { input.keys.clear(); input.firing = false; });
 const held = (...k) => k.some(x => input.keys.has(x));
 
-function playerCommand() {
-  const h = input.yaw, f = fwdOf(h), r = rightOf(h);
+// sticks ramp like a real gimbal instead of snapping: a tap is a small tilt, holding goes to full
+function ramp(cur, target, dt) { const r = target === 0 ? 4 : 2.2; return cur + Math.max(-r * dt, Math.min(r * dt, target - cur)); }
+function playerCommand(dt) {
+  const P = game.player;
   const fx = (held('w', 'arrowup') ? 1 : 0) - (held('s', 'arrowdown') ? 1 : 0);
   const rx = (held('d', 'arrowright') ? 1 : 0) - (held('a', 'arrowleft') ? 1 : 0);
-  const speed = held('shift') ? 7 : 60; // 60 = "as fast as the airframe goes"; Shift = precise
-  let v = add(mul(f, fx), mul(r, rx));
-  if (len(v) > 1) v = norm(v);
-  const vz = (held(' ') ? 1 : 0) - (held('c', 'control') ? 1 : 0);
-  const cp = Math.cos(input.pitch);
-  return { v: mul(v, speed), vz: vz * (held('shift') ? 3 : 9), heading: h, aim: v3(Math.sin(h) * cp, Math.sin(input.pitch), Math.cos(h) * cp), fire: input.firing };
+  const yawKey = (held('q') ? 1 : 0) - (held('e') ? 1 : 0); // +heading = turn left
+  const up = (held(' ') ? 1 : 0) - (held('control', 'x') ? 1 : 0);
+  const gentle = held('shift') ? 0.35 : 1;
+  input.stick.fwd = ramp(input.stick.fwd, fx * gentle, dt);
+  input.stick.right = ramp(input.stick.right, rx * gentle, dt);
+  const aim = aimDir();
+  if (input.mode === 'acro') { // rates: flips and rolls; throttle is yours (around hover)
+    input.yaw = P.heading;
+    const hover = P.mass * 9.81 / (4 * AIRFRAME.maxThrust);
+    return { mode: 'acro', rates: { pitch: input.stick.fwd * 4.5, roll: input.stick.right * 4.5, yaw: yawKey * 2.5 }, throttle: hover * (1 + 0.9 * Math.max(0, up)) - hover * 0.8 * Math.max(0, -up), aim, fire: input.firing };
+  }
+  input.yaw += yawKey * 1.8 * dt;
+  const vz = up * (held('shift') ? 3 : 9);
+  if (input.mode === 'assist') {
+    const h = input.yaw, v = add(mul(fwdOf(h), fx), mul(rightOf(h), rx));
+    return { v: mul(len(v) > 1 ? norm(v) : v, held('shift') ? 7 : 60), vz, heading: h, yawRate: yawKey * 1.8, aim, fire: input.firing };
+  }
+  return { mode: 'angle', tilt: { fwd: input.stick.fwd, right: input.stick.right }, vz, heading: input.yaw, yawRate: yawKey * 1.8, aim, fire: input.firing };
 }
+// where the gun points: along the camera
+function aimDir() { const d = new THREE.Vector3(); camera.getWorldDirection(d); return v3(d.x, d.y, d.z); }
 
 // ---------------------------------------------------------------- HUD
 const radar = $('radar').getContext('2d');
@@ -448,7 +469,7 @@ function frame(now) {
   if (!game) return;
   if (running) {
     acc += dtReal;
-    const cmd = playerCommand();
+    const cmd = playerCommand(dtReal);
     for (let n = 0; acc >= DT && n < 12; n++, acc -= DT) {
       for (const e of game.step(cmd)) {
         if (e.type === 'hit') { spark(e.p, e.who === game.player ? 1.2 : 0.8); if (e.who === game.player) toast(e.rotor >= 0 ? `ROTOR ${e.rotor + 1} HIT` : 'HULL HIT', '#ff4a4a'); else toast(`HIT ${e.who.name.toUpperCase()}`); }
@@ -492,16 +513,23 @@ function frame(now) {
   // camera: chase (pulled in if a wall is behind you) or nose cam
   const cp = Math.cos(input.pitch), look = new THREE.Vector3(Math.sin(input.yaw) * cp, Math.sin(input.pitch), Math.cos(input.yaw) * cp);
   const p = P.pos;
-  if (input.cam === 'nose') {
-    const m = P.muzzle; camPos.set(m.x, m.y + 0.05, m.z);
+  if (input.cam === 'nose') { // FPV: camera bolted to the airframe, tilted up by the gimbal (mouse Y)
+    const m = P.part(v3(0, 0.02, 0.16)), q = P.q;
+    camera.position.set(m.x, m.y, m.z);
+    camera.quaternion.set(q.x, q.y, q.z, q.w).multiply(tmpQ.setFromAxisAngle(tmpV.set(0, 1, 0), Math.PI))
+      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (input.mode === 'acro' ? 0.3 : 0.1) + input.pitch));
+    camPos.copy(camera.position);
   } else {
     const back = v3(-look.x, -look.y + 0.28, -look.z), bl = len(back), dir = mul(back, 1 / bl);
     const hit = game.world.castRay(new RAPIER.Ray(p, dir), 6.5, true, undefined, undefined, undefined, P.body);
     const d = Math.max(0.8, (hit ? hit.timeOfImpact : 6.5) - 0.3);
     camPos.lerp(tmpV.set(p.x + dir.x * d, p.y + dir.y * d, p.z + dir.z * d), 0.35);
   }
-  camera.position.copy(camPos);
-  camera.lookAt(camPos.x + look.x * 100, camPos.y + look.y * 100, camPos.z + look.z * 100);
+  if (input.cam !== 'nose') {
+    camera.position.copy(camPos);
+    camera.lookAt(camPos.x + look.x * 100, camPos.y + look.y * 100, camPos.z + look.z * 100);
+  }
+  $('fmode').textContent = input.mode.toUpperCase();
   sun.position.set(p.x + 180, p.y + 400, p.z + 120); sun.target.position.set(p.x, p.y, p.z);
   hud();
   renderer.render(scene, camera);
