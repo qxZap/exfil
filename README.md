@@ -25,6 +25,7 @@ npm start          # → http://localhost:8080
 | `G` (hold) | power cut: motors to idle, drop at ~13 m/s while staying level; release to catch yourself (~6 m) |
 | `B` | intercepted hunter telemetry: what the hunters are thinking |
 | `K` | show / hide the on-screen controls panel |
+| `M` / `N` | sound on/off · operator voice on/off (radio squelch and beeps stay, speech turns into garbled radio) |
 | `R` | restart the same city (any time, or on the end screen); `Enter` on the end screen: new city |
 
 **Flight modes**, like a real flight controller:
@@ -58,6 +59,24 @@ While you're flying, the game takes every key, so browser shortcuts like Ctrl+S 
 - **Cars:** 360 of them, in 7 models (sedan, SUV, van, truck, delivery, taxi, the odd police car), driving the grid.
 - **Pedestrians:** about 520 people walk the sidewalks around you or stand about. When a drone comes in low or rounds hit near the street, they run away from it, then calm down.
 - **Performance:** everything repeated is GPU-instanced. The whole city is about 850 draw calls with 27 hunters, at 220+ FPS on an RTX 4080.
+
+## Sound
+
+All of it is synthesized live with Web Audio (no sound files) and driven by the simulation:
+
+- **Your rotors:** four tones at each motor's blade-pass frequency (ω·2/2π, ~160 Hz at hover). Each gets louder with its thrust, and each has an ESC whine at 7 pole pairs. Prop wash rises with total thrust. Throttle up, sprint, cut power (G), or lose a rotor, and you hear it.
+- **Hunters:** the nearest 8 get a 3D-positioned (HRTF) voice pitched from their own motors, with **Doppler** from closing speed.
+- **Helicopters:** 3D positioned, with a low rotor slap at the ~19 Hz blade-pass rate and turbine whine.
+- **Gunfire:**
+  - Your gun: a sharp crack with a thump.
+  - Hunters' guns: 3D positioned and **delayed by distance ÷ 343 m/s**, duller and more echoing the further away.
+  - Near misses: rounds passing within 5 m of you snap (supersonic crack).
+  - Ricochets whine, hits on your airframe clank, and impacts thud.
+- **Environment:** wind that grows with your airspeed through the air, a city hum that fades as you climb, and a war going on around you. That means artillery booms and distant machine-gun bursts echoing off the city (convolution reverb), and sirens drifting across town.
+- **Radio:**
+  - Your operator (OPS) briefs you and calls out when you're tracked, when you lose them, distance milestones, hits, rotor damage, punctured cells, battery warnings, kills, and helicopter downwash. The voice is the browser's text-to-speech, wrapped in squelch and a roger beep.
+  - You overhear the **hunter net** too, as garbled radio talk, whenever a new hunter takes the lead on your track.
+  - Everything said shows in the radio log.
 
 ## The drone
 
@@ -132,7 +151,6 @@ The autopilot player is a simple flee-and-stay-low script, so a human who uses t
 
 ## Not done yet
 
-- Sound.
 - Dedicated high-altitude spotter drones. The swarm already shares every sighting and climbs high to search, but no hunter is a dedicated spotter.
 - A "return to base" objective as an alternative way to win.
 - Cars only collide at street level (below 3 m) and are simplified.
@@ -154,5 +172,7 @@ The autopilot player is a simple flee-and-stay-low script, so a human who uses t
 | [`client.js`](client.js) | Rendering (sky, cascaded shadows, procedural facade shaders, instancing), HUD, radar scope, input |
 | [`models.js`](models.js) | Loads the glTF models; bakes them for instancing; live clones with spinning rotors |
 | [`people.js`](people.js) | The pedestrian crowd |
+| [`audio.js`](audio.js) | Synthesized sound: rotors, Doppler, gunfire at the speed of sound, wind, city, war, radio |
+| [`radio.js`](radio.js) | The radio net: operator callouts and the overheard hunter net |
 | [`test-sim.mjs`](test-sim.mjs) | Headless test bench and Monte Carlo |
 | [`serve.mjs`](serve.mjs) | Zero-dependency static server |

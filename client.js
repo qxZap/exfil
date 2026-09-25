@@ -4,6 +4,8 @@ import { CSM } from 'three/addons/csm/CSM.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { loadModels, bake, instanced, liveClone, topLean } from './models.js';
 import { Crowd } from './people.js';
+import { Audio } from './audio.js';
+import { RadioNet } from './radio.js';
 import { Game, DT, RAPIER, CITY, carPose, v3, add, sub, mul, len, flat, norm, dist, fwdOf, rightOf, headingOf, AIRFRAME, ESCAPE_DIST, HELI } from './sim.js';
 
 const $ = id => document.getElementById(id);
@@ -83,6 +85,14 @@ async function ensureModels() {
   for (const k of CAR_TYPES) BAKED[k] = bake(MODELS[k], { length: CAR_LEN[k] });
 }
 const crowd = new Crowd(scene, std);
+const audio = new Audio();
+const radioLines = [];
+function radioLog(from, text) {
+  radioLines.push({ from, text, at: performance.now() });
+  if (radioLines.length > 5) radioLines.shift();
+  $('radioLog').innerHTML = radioLines.map(l => `<div class="${l.from === 'OPS' ? 'ops' : 'net'}"><b>${l.from}</b> ${l.text}</div>`).join('');
+}
+const radio = new RadioNet(audio, radioLog);
 const tmpS = new THREE.Vector3();
 
 // ---------------------------------------------------------------- city meshes
@@ -324,8 +334,10 @@ async function start(seed) {
   $('loading').style.display = 'grid';
   await new Promise(r => requestAnimationFrame(() => setTimeout(r, 30)));
   settings.seed = seed ?? settings.seed ?? 1;
+  audio.start();
   await ensureModels();
   game = await Game.create({ seed: settings.seed, difficulty: settings.difficulty });
+  radio.reset(); radioLines.length = 0; $('radioLog').innerHTML = '';
   buildCityMeshes(game); buildCars(game); buildHelis(game); crowd.people = [];
   for (const m of droneMeshes) scene.remove(m);
   droneMeshes = game.drones.map(d => { const m = d === game.player ? droneMesh(0xffffff, 0x46e08a) : droneMesh(0x8a3a3a, 0xff3030); scene.add(m); return m; });
@@ -362,6 +374,8 @@ addEventListener('keydown', e => {
   if (k === 'v' || k === 'c') input.cam = input.cam === 'chase' ? 'nose' : 'chase';
   if (k === 'f') { input.mode = MODES[(MODES.indexOf(input.mode) + 1) % MODES.length]; toast(`${input.mode.toUpperCase()} MODE`); }
   if (k === 'k') showKeys(!keysShown);
+  if (k === 'm') { audio.muted = !audio.muted; toast(audio.muted ? 'SOUND OFF' : 'SOUND ON'); }
+  if (k === 'n') { audio.voice = !audio.voice; if (!audio.voice) speechSynthesis?.cancel(); toast(audio.voice ? 'RADIO VOICE ON' : 'RADIO VOICE OFF (garbled only)'); }
   if (k === 'h') { input.head = !input.head; toast(input.head ? 'HEAD FIRST · SPRINT' : 'FACE FIRST'); }
   if (k === 'r' && game && (running || $('over').style.display === 'grid')) { start(settings.seed); return; } // retry, same city
   if (k === 'enter' && $('over').style.display === 'grid') { start(1 + Math.floor(Math.random() * 1e6)); return; }
@@ -507,6 +521,7 @@ function frame(now) {
     const cmd = playerCommand(dtReal);
     for (let n = 0; acc >= DT && n < 12; n++, acc -= DT) {
       for (const e of game.step(cmd)) {
+        audio.event(e, game);
         if (e.type === 'hit') { spark(e.p, e.who === game.player ? 1.2 : 0.8); if (e.who === game.player) toast(e.rotor >= 0 ? `ROTOR ${e.rotor + 1} HIT` : 'HULL HIT', '#ff4a4a'); else toast(`HIT ${e.who.name.toUpperCase()}`); }
         if (e.type === 'ricochet') { spark(e.p, 0.5); if (e.p.y < 20) crowd.scare(e.p, 60, game.time); }
         if (e.type === 'impact' && e.who === game.player) toast(`IMPACT ${e.dv.toFixed(0)} m/s`, '#ffb020');
@@ -575,6 +590,7 @@ function frame(now) {
   $('posture').textContent = $('kPosture').textContent = held('g') ? 'POWER CUT' : input.head ? 'HEAD' : 'FACE';
   $('posture').style.color = held('g') ? 'var(--bad)' : input.head ? 'var(--warn)' : '';
   camera.updateMatrixWorld(); csm.update();
+  if (running || game.status !== 'play') { audio.update(game, camera, dtReal, { cut: held('g') }); radio.update(game, performance.now() / 1000); }
   hud();
   renderer.render(scene, camera);
 }
@@ -593,4 +609,4 @@ function showKeys(on) {
   try { localStorage.setItem('exfil.keys', on ? '1' : '0'); } catch {}
 }
 try { showKeys(localStorage.getItem('exfil.keys') !== '0'); } catch { showKeys(true); }
-window.exfil = { get game() { return game; }, input, start, settings, renderer, crowd };
+window.exfil = { get game() { return game; }, input, start, settings, renderer, crowd, audio, radio };

@@ -44,6 +44,10 @@
   #keysPanel kbd { margin-right: 4px; }
   #keysHint { bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--dim); display: none; padding: 5px 10px; }
   @media (max-width: 1100px) { #keysPanel { grid-template-columns: repeat(2, auto); bottom: 200px; } }
+  #radioLog { position: fixed; left: 14px; bottom: 190px; width: 360px; font-size: 12px; pointer-events: none; }
+  #radioLog div { background: rgba(10,13,17,.62); border-left: 3px solid var(--hud); padding: 4px 8px; margin-top: 4px; border-radius: 4px; }
+  #radioLog div.net { border-left-color: var(--bad); color: #d9b3b3; font-style: italic; }
+  #radioLog b { color: var(--hud); margin-right: 6px; font-size: 11px; letter-spacing: .08em; } #radioLog .net b { color: var(--bad); }
   #loading { position: fixed; inset: 0; display: none; place-items: center; background: #0b0e12; z-index: 6; color: var(--hud); letter-spacing: .2em; }
 </style>
 <script type="importmap">
@@ -59,6 +63,7 @@
 <div id="cross"></div>
 <div id="rwr"></div>
 <div id="toast"></div>
+<div id="radioLog"></div>
 
 <div id="mission" class="panel">
   <div class="lab">Exfil: nearest hunter</div>
@@ -94,7 +99,7 @@
   <span><kbd>WASD</kbd>tilt</span><span><kbd>Q/E</kbd>yaw</span><span><kbd>Space/X</kbd>up / down</span><span><kbd>Shift</kbd>gentle</span>
   <span><kbd>Mouse</kbd>look · aim</span><span><kbd>LMB</kbd>fire</span><span><kbd>F</kbd>mode: <b id="kMode">ANGLE</b></span><span><kbd>C</kbd>1st / 3rd person</span>
   <span><kbd>G</kbd>hold: power cut (drop)</span><span><kbd>H</kbd>posture: <b id="kPosture">FACE</b></span><span><kbd>B</kbd>hunter intel</span><span><kbd>R</kbd>restart</span>
-  <span><kbd>Esc</kbd>free mouse</span><span><kbd>K</kbd>hide these keys</span>
+  <span><kbd>M</kbd>sound on/off</span><span><kbd>N</kbd>radio voice</span><span><kbd>Esc</kbd>free mouse</span><span><kbd>K</kbd>hide these keys</span>
 </div>
 <div id="keysHint" class="panel"><kbd>K</kbd> controls</div>
 <div id="menu" class="screen">
@@ -116,6 +121,7 @@
       <kbd>H</kbd><span>posture: FACE first (60° max) or HEAD first: tips up to ~72°, all power to speed (+35%), 2× the battery drain</span>
       <kbd>G</kbd><span>hold to cut power: drop like a stone (stays level), release to catch yourself</span>
       <kbd>C</kbd><span>first / third person · <kbd>B</kbd> intercepted hunter telemetry</span>
+      <kbd>M / N</kbd><span>sound on/off · operator voice on/off (radio stays, garbled)</span>
       <kbd>Esc</kbd><span>release the mouse</span>
     </div>
     <button class="go" id="start">Take off</button>
