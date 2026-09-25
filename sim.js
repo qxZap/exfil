@@ -493,7 +493,7 @@ for (const yaw of [0, 20, -20, 45, -45, 75, -75, 110, -110, 150, -150, 180]) for
 }
 const PROX = [...Array.from({ length: 8 }, (_, i) => v3(Math.cos(i * Math.PI / 4), 0, Math.sin(i * Math.PI / 4))), v3(0, 1, 0), v3(0, -1, 0)];
 export class Navigator {
-  constructor(drone) { this.d = drone; this.last = null; this.ball = new RAPIER.Ball(1.2); this.scan = null; this.scanAt = -1; }
+  constructor(drone) { this.d = drone; this.last = null; this.ball = new RAPIER.Ball(1.2); this.probe = new RAPIER.Ball(0.55); this.scan = null; this.scanAt = -1; }
   clearance(from, dir, range) {
     const hit = this.d.world.castShape(from, { x: 0, y: 0, z: 0, w: 1 }, dir, this.ball, 0, range, false, undefined, SEE_WORLD, undefined, this.d.body);
     return hit ? hit.time_of_impact : range;
@@ -510,7 +510,7 @@ export class Navigator {
     const to = sub(goal, p), gd = len(to), want = norm(to);
     const range = clamp(sp * 3 + 15, 25, 120);
     // plan with the braking the airframe reliably achieves (measured ~8.6 m/s²), not the theoretical 17
-    const aBrake = 7.5;
+    const aBrake = 6.5;
     // wingmen and helicopters, and where each will be in ~0.8 s (1.5 s for helicopters): avoid both
     const near = [
       ...others.filter(o => dist(o.p, p) < 90).map(o => ({ ...o, f: add(o.p, mul(o.v, 0.8)), r: 15 })),
@@ -540,15 +540,17 @@ export class Navigator {
       best.clearVel = Math.min(range, ...best.velDirs.map(u => this.clearance(p, u, range)));
       // proximity ring (like the short-range sensors on real drones): push off any surface within 3 m
       best.push = v3();
+      // (small sphere sweeps, not rays: a 36 cm antenna mast can't slip between them)
       for (const q of PROX) {
-        const hit = d.world.castRay(new RAPIER.Ray(p, q), 3, true, undefined, SEE_WORLD, undefined, d.body);
-        if (hit) best.push = add(best.push, mul(q, -(3 - hit.timeOfImpact) * 2.5));
+        const hit = d.world.castShape(p, { x: 0, y: 0, z: 0, w: 1 }, q, this.probe, 0, 3.5, false, undefined, SEE_WORLD, undefined, d.body);
+        if (hit) best.push = add(best.push, mul(q, -(3.5 - hit.time_of_impact) * 2.5));
       }
       this.scan = best; this.scanAt = t; this.last = best.dir;
     }
     const { dir, clear, clearVel } = this.scan;
     // stopping distance = reaction (tilting back takes ~0.35 s) + v²/2a
-    const stopOK = c => Math.max(0, Math.sqrt(aBrake * aBrake * 0.35 * 0.35 + 2 * aBrake * Math.max(0, c - 6)) - aBrake * 0.35);
+    const RT = 0.5; // reaction: tilting back before braking really bites
+    const stopOK = c => Math.max(0, Math.sqrt(aBrake * aBrake * RT * RT + 2 * aBrake * Math.max(0, c - 9)) - aBrake * RT);
     const vMax = Math.min(speed, stopOK(clear), Math.max(1.5, stopOK(clearVel)), Math.sqrt(2 * aBrake * 0.6 * gd) + 1);
     let vel = mul(dir, vMax);
     // personal space: push away from a wingman, earlier when we're closing fast, but only if
@@ -668,7 +670,15 @@ export class Hunter {
         this.burst -= dt;
         if (this.burst < -0.6) this.burst = 0.9;
         const r = dist(me, aimAt.pos);
-        const blocked = others.some(o => { const rel = sub(o, me), along = dot(rel, sol); return along > 0 && along < r && len(sub(rel, mul(sol, along))) < 4; });
+        // where will each wingman be when the round gets that far? keep 6 m clear of that
+        const blocked = others.some(o => {
+          for (const lead of [0, 1]) {
+            const q = lead ? add(o.p, mul(o.v, Math.max(0, dot(sub(o.p, me), sol)) / 280)) : o.p;
+            const rel = sub(q, me), along = dot(rel, sol);
+            if (along > 0 && along < r + 5 && len(sub(rel, mul(sol, along))) < 6) return true;
+          }
+          return false;
+        });
         if (blocked) this.thought += ' Wingman in my line of fire, holding.';
         d.firing = this.burst > 0 && !blocked && this.sensors.los(me, aimAt.pos);
       }
