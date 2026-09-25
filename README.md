@@ -10,7 +10,7 @@ This is a drone escape game in a procedurally generated city about 4 km across. 
 
 ```bash
 npm install
-npm start          # → http://localhost:8080
+npm start          # → game http://localhost:8090 · hunter monitor http://localhost:8091
 ```
 
 | | |
@@ -55,7 +55,9 @@ While you're flying, the game takes every key, so browser shortcuts like Ctrl+S 
 - **Traffic:** about 14,300 cars in lanes (every road, both directions). Cars in a lane share its speed and keep at least 20 m apart. Full 3D models are drawn within 320 m, simple boxes out to the haze. Updating all of them costs under 1 ms per frame.
 
 - **Sky and light:** a physically based sky (Rayleigh/Mie scattering) with a low sun through haze. It is also baked into an environment map, so glass and metal reflect it. ACES tone mapping and distance haze.
-- **Shadows:** four cascades, sharp at your drone and still present 900 m out, with normal-offset biasing (no striping on walls).
+- **Shadows:** four cascades, sharp at your drone and still present 900 m out. Buildings cast from their back faces, so lit walls never self-shadow (no striping).
+- **Clouds and sun rays:** a ray-marched volumetric cloud layer at 900–1,500 m, lit by the sun or moon with silver linings and drifting on the wind, plus crepuscular rays through the gaps.
+- **Neutral daylight:** the HDR sky is used only for faint reflections. Using it as ambient light washed every wall pale blue.
 - **Procedural facades from world position** (no textures): floors and slab lines, window grids that vary per building (ribbon glass to punched windows), reflective glass, lit rooms, blown-out panes, weathering, gravel roofs, and shopfronts with awnings at street level.
 - **Streets:** worn asphalt, sidewalks, dashed centre lines, and patchy ground with scorch marks.
 - **Rooftop clutter:** AC units, water towers and masts with blinking aviation lights. These are real colliders.
@@ -86,6 +88,22 @@ All of it is synthesized live with Web Audio (no sound files) and driven by the 
   - "target is down, moving to confirm" and "confirmed".
 - **How the radio sounds:** the voice is real recorded speech (a CC0 Piper voice, 65 clips), stitched live through a **CB-radio chain**: 400 Hz high-pass, 2.6 kHz low-pass, mid "honk", overdrive, carrier hiss, squelch burst and "kssht" tail. Distant transmitters are weaker, with more hiss and fading.
 - **Direction finding:** every transmission gives you a **DF bearing** toward the hunter who keyed the mic, drawn on your radar for 6 s with realistic error (worse at range). You can find them by listening, even when your sensors can't see them.
+
+## Hunter monitor (port 8091)
+
+`npm start` serves the game on **http://localhost:8090** and a **hunter monitor** on **http://localhost:8091**. The server prints the network addresses a friend can use to open the monitor, e.g. `http://192.168.1.132:8091`. Windows may ask whether Node can accept connections; allow it on private networks.
+
+- **The feed:** while you play, the game streams its state (every hunter's pose, rotors, AI mode, decision, camera direction, track on you, navigation choice, plus your drone and the rounds in flight) about 10 times a second. The monitor rebuilds the same city from the seed and shows **each hunter's own camera view**.
+- **Targeting overlay per view, animated by the hunter's AI state:**
+  - TRANSIT: heading tape.
+  - CHASE: target brackets tightening as the lock settles, sensor and range, a lead marker and **FIRE** when shooting.
+  - SEARCH: a rotating sweep with pulsing rings.
+  - CONFIRM: descending chevrons.
+  - Destroyed: SIGNAL LOST; landed with a flat battery: LANDED.
+- **Every view also has the hunter's own radar scope:** heading-up, its radar range, its camera cone, its track on you (red from its own sensors, orange via the data link), its wingmen and the helicopters.
+- **Decisions:** each view shows the hunter's current decision. **Click a view to expand it**: a big live view, the full **decision log** (every change in what it's deciding, timestamped), telemetry (speed, altitude, battery and power, hull, track age and source, clearance ahead, downwash, gun) and a large scope.
+- **Voices:** press *radio* to hear the hunters' net in the monitor too, the same CB-filtered intercepts.
+- **Controls:** 4, 9, 16 or 27 views, rendered round-robin so it stays smooth. Shadows are off by default here, with a toggle.
 
 ## The drone
 
@@ -185,4 +203,7 @@ The autopilot player is a simple flee-and-stay-low script, so a human who uses t
 | [`audio.js`](audio.js) | Synthesized sound: rotors, Doppler, gunfire at the speed of sound, wind, city, war, radio |
 | [`radio.js`](radio.js) | The intercepted enemy radio net and direction finding |
 | [`test-sim.mjs`](test-sim.mjs) | Headless test bench and Monte Carlo |
-| [`serve.mjs`](serve.mjs) | Zero-dependency static server |
+| [`serve.mjs`](serve.mjs) | Zero-dependency server: the game (8090), the hunter monitor (8091), and the live state relay (POST /state → SSE /stream) |
+| [`world.js`](world.js) | The rendered world, shared by the game and the monitor |
+| [`spectator.html`](spectator.html) · [`spectator.js`](spectator.js) | The hunter monitor |
+| [`atmosphere.js`](atmosphere.js) | Volumetric clouds and sun rays |

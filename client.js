@@ -239,6 +239,34 @@ function gameOver(status) {
   $('over').style.display = 'grid';
 }
 
+// ---------------------------------------------------------------- live feed for the hunter monitor (port 8091)
+// ~10×/s: every hunter's pose, rotors, AI mode and decision, where its camera looks, its track on
+// you, its navigation choice; plus your drone and the rounds in flight
+let pubAt = 0, pubBusy = false;
+const r2 = x => Math.round(x * 100) / 100, V = v => [r2(v.x), r2(v.y), r2(v.z)], Q = q => [r2(q.x * 1000) / 1000, r2(q.y * 1000) / 1000, r2(q.z * 1000) / 1000, r2(q.w * 1000) / 1000];
+function publish(now) {
+  if (!game || pubBusy || now - pubAt < 100 || !(running || game.ended)) return; // not the menu's demo city
+  pubAt = now;
+  const t = game.time, P = game.player;
+  const snap = {
+    v: 1, seed: game.seed, diff: game.diff.key, n: game.hunters.length, t: r2(t), hour: r2(settings.hourNow), status: game.status, ended: !!game.ended, closing: game.closing ?? null,
+    link: game.link ? { by: game.hunters.indexOf(game.link.by), src: game.link.src, age: r2(t - game.link.t), p: V(game.link.pos) } : null,
+    player: { p: V(P.pos), q: Q(P.q), w: P.rotors.map(r => Math.round(r.w)), alive: P.alive, hull: Math.round(P.hull) },
+    hunters: game.hunters.map(h => {
+      const d = h.d, trk = h.sensors.track(P, t, 3), sc = h.nav.scan;
+      return {
+        p: V(d.pos), q: Q(d.q), w: d.rotors.map(r => Math.round(r.w)), vel: V(d.vel), alive: d.alive, landed: !!d.landed, hull: Math.round(d.hull), soc: r2(d.soc),
+        mode: h.mode, thought: h.thought, firing: d.firing, look: V(h.sensors.lookDir), aim: V(d.aim),
+        trk: trk ? { p: V(trk.pos), src: trk.src, age: r2(t - trk.t), own: true } : (game.link && t - game.link.t < 1 ? { p: V(game.link.pos), src: 'LINK', age: r2(t - game.link.t), own: false } : null),
+        lead: game.link?.by === h, sprint: !!d.cmd?.sprint, clear: sc ? Math.round(sc.clear) : null, dir: sc ? V(sc.dir) : null, wash: sc ? r2(sc.wash) : 0, power: Math.round(d.battery.powerW),
+      };
+    }),
+    rounds: game.rounds.slice(-160).map(b => [r2(b.p.x), r2(b.p.y), r2(b.p.z), r2(b.v.x), r2(b.v.y), r2(b.v.z), b.owner === P ? 1 : 0]),
+  };
+  pubBusy = true;
+  fetch('/state', { method: 'POST', body: JSON.stringify(snap), headers: { 'content-type': 'application/json' } }).catch(() => {}).finally(() => { pubBusy = false; });
+}
+
 // ---------------------------------------------------------------- loop
 let acc = 0, last = performance.now();
 const perf = { cars: 0, crowd: 0, render: 0, sim: 0 }; // ms, smoothed (window.exfil.perf)
@@ -293,6 +321,7 @@ function frame(now) {
   world.view(camera);
   if (running || game.status !== 'play') { audio.update(game, camera, dtReal, { cut: held('g') }); radio.update(game, performance.now() / 1000); }
   hud();
+  publish(now);
   { const t0 = performance.now(); world.render(); perf.render = perf.render * 0.95 + (performance.now() - t0) * 0.05; }
 }
 requestAnimationFrame(frame);
@@ -312,4 +341,4 @@ try { showKeys(localStorage.getItem('exfil.keys') !== '0'); } catch { showKeys(t
 // show the saved time-of-day choices as selected
 document.querySelectorAll('#tod button').forEach(b => b.classList.toggle('sel', +b.dataset.v === settings.hour));
 document.querySelectorAll('#clockMode button').forEach(b => b.classList.toggle('sel', (b.dataset.v === 'run') === settings.clock));
-window.exfil = { get game() { return game; }, input, start, settings, renderer, crowd, audio, radio, perf, scene, camera, csm, clouds, rays, composer };
+window.exfil = { get game() { return game; }, input, start, settings, renderer, crowd, audio, radio, perf, scene, camera, csm, clouds, rays, composer, world };

@@ -86,15 +86,17 @@ export function createWorld({ renderer, camera }) {
     const bySun = SUNDIR.y > 0.03;
     csm.lightDirection.copy(bySun ? SUNDIR : MOONDIR).negate();
     const low = THREE.MathUtils.smoothstep(SUNDIR.y, 0.03, 0.45);                    // golden hour when low
-    const I = bySun ? 2.8 * THREE.MathUtils.smoothstep(SUNDIR.y, 0.03, 0.2) : 0.5;
+    const I = bySun ? 3.4 * THREE.MathUtils.smoothstep(SUNDIR.y, 0.03, 0.2) : 0.5;
     const C = bySun ? new THREE.Color(0xff9a50).lerp(new THREE.Color(0xfff0dc), low) : new THREE.Color(0x8fa8ff);
     for (const l of csm.lights) { l.intensity = I; l.color.copy(C); }
-    hemi.intensity = 0.1 + 0.28 * day; // low fill: shadows read
-    hemi.color.set(day > 0.5 ? 0xcfdde8 : 0x5d6f9a);
+    // neutral fill light. The physical sky is HDR-bright: used as ambient it turned every wall pale blue
+    // ("icy"). Measured on a sunlit wall: (100,126,144) sky-lit vs (60,59,55) neutral.
+    hemi.intensity = 0.15 + 0.45 * day;
+    hemi.color.set(day > 0.5 ? 0xd8d4cc : 0x5d6f9a); hemi.groundColor.set(0x6a6258);
     const dusk = Math.max(0, 1 - Math.abs(SUNDIR.y - 0.03) / 0.15);                  // orange haze around sunrise/sunset
     scene.fog.color.set(0x0b1018).lerp(new THREE.Color(0xb4bdc4), day).lerp(new THREE.Color(0xc0987a), dusk * 0.45);
-    scene.environmentIntensity = 0.05 + 0.2 * day;
-    renderer.toneMappingExposure = 0.85 + 0.45 * NIGHT.value;
+    scene.environmentIntensity = 0.008 + 0.012 * day; // a trace: glints on glass, not a blue flood
+    renderer.toneMappingExposure = 1.0 + 0.3 * NIGHT.value;
     stars.material.opacity = Math.max(0, NIGHT.value - 0.2) * 1.1;
     moon.position.copy(MOONDIR).multiplyScalar(4300); moon.visible = NIGHT.value > 0.05;
     if (envAt === null || Math.abs(h - envAt) > 0.2) { // re-bake reflections when the light has moved
@@ -216,6 +218,7 @@ export function createWorld({ renderer, camera }) {
             }
           }`);
     });
+    m.shadowSide = THREE.BackSide; // closed boxes: only back faces write shadow depth, so lit walls never self-shadow (no acne)
     return m;
   }
   // ground: patchy grass, dry dirt, scorch marks
@@ -540,8 +543,8 @@ export function createWorld({ renderer, camera }) {
     cam.updateMatrixWorld(); csm.update();
   }
   function resize(w, h) { csm.updateFrustums(); composer.setSize(w, h); }
-  const world = {
-    scene, csm, clouds, rays, composer, crowd, NIGHT, SUNDIR, perf,
+  const world = { hemi, sky, envSky,
+    scene, csm, clouds, rays, composer, crowd, NIGHT, SUNDIR, perf, setTimeOfDay,
     ensureModels, buildCityMeshes, buildCars, buildHelis, setDrones, spark, update, view, resize,
     render: () => composer.render(),
     build(game) { buildCityMeshes(game); buildCars(game); buildHelis(game); setDrones(game); crowd.people = []; },

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exfil · Hunter monitor</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --ink: #e8edf2; --dim: #8f9aa6; --hud: #9dffc6; --bad: #ff4a4a; --warn: #ffb020; --panel: rgba(10, 13, 17, .82); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #07090c; color: var(--ink); font: 12px/1.35 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 44px; display: flex; align-items: center; gap: 16px; padding: 0 14px; background: #0c1015; border-bottom: 1px solid rgba(157,255,198,.15); z-index: 3; }
+  #bar h1 { margin: 0; font-size: 16px; letter-spacing: .2em; color: var(--hud); }
+  #bar .grow { flex: 1; }
+  #bar button { font: inherit; color: var(--ink); background: transparent; border: 1px solid rgba(157,255,198,.3); border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+  #bar button.sel { background: var(--hud); color: #06140c; }
+  #conn { color: var(--warn); }
+  canvas#view, canvas#hud { position: fixed; left: 0; top: 44px; }
+  canvas#hud { pointer-events: none; z-index: 2; }
+  #wait { position: fixed; inset: 44px 0 0 0; display: grid; place-items: center; color: var(--dim); font-size: 15px; text-align: center; z-index: 1; }
+  #radioLog { position: fixed; left: 10px; bottom: 10px; width: 420px; z-index: 3; pointer-events: none; }
+  #radioLog div { background: rgba(10,13,17,.75); border-left: 3px solid var(--bad); color: #e9c9c9; font-style: italic; padding: 3px 8px; margin-top: 3px; border-radius: 4px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./node_modules/three/build/three.module.js",
+  "three/addons/": "./node_modules/three/examples/jsm/",
+  "@dimforge/rapier3d-compat": "./node_modules/@dimforge/rapier3d-compat/dist/rapier.mjs"
+} }
+</script>
+</head>
+<body>
+<div id="bar">
+  <h1>HUNTER MONITOR</h1>
+  <span id="conn">waiting for a game…</span>
+  <span id="info"></span>
+  <span class="grow"></span>
+  <span style="color:var(--dim)">views</span>
+  <span id="layouts"><button data-n="4">4</button> <button data-n="9" class="sel">9</button> <button data-n="16">16</button> <button data-n="27">27</button></span>
+  <button id="audioBtn">radio: click to enable</button>
+  <button id="shadowsBtn">shadows: off</button>
+  <span style="color:var(--dim)">click a view to expand · Esc back</span>
+</div>
+<canvas id="view"></canvas>
+<canvas id="hud"></canvas>
+<div id="radioLog"></div>
+<div id="wait">Waiting for a game…<br><br>Start one at <b>http://localhost:8090</b> (on the machine running the server).<br>Every hunter's camera and what it's deciding will appear here.</div>
+<script type="module" src="./spectator.js"></script>
+</body>
+</html>
