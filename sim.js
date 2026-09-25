@@ -442,8 +442,9 @@ for (const yaw of [0, 20, -20, 45, -45, 75, -75, 110, -110, 150, -150, 180]) for
   if (Math.abs(pitch) === 85 && yaw !== 0) continue;
   NAV_DIRS.push({ yaw: yaw * Math.PI / 180, pitch: pitch * Math.PI / 180 });
 }
+const PROX = [...Array.from({ length: 8 }, (_, i) => v3(Math.cos(i * Math.PI / 4), 0, Math.sin(i * Math.PI / 4))), v3(0, 1, 0), v3(0, -1, 0)];
 export class Navigator {
-  constructor(drone) { this.d = drone; this.last = null; this.ball = new RAPIER.Ball(0.9); this.scan = null; this.scanAt = -1; }
+  constructor(drone) { this.d = drone; this.last = null; this.ball = new RAPIER.Ball(1.2); this.scan = null; this.scanAt = -1; }
   clearance(from, dir, range) {
     const hit = this.d.world.castShape(from, { x: 0, y: 0, z: 0, w: 1 }, dir, this.ball, 0, range, false, undefined, SEE_WORLD, undefined, this.d.body);
     return hit ? hit.time_of_impact : range;
@@ -455,14 +456,17 @@ export class Navigator {
   }
   // goal: world point; speed: wanted m/s; others: positions of friendly drones to keep clear of.
   // returns a flight-controller command
-  steer(goal, speed, t, { helis = [], minAgl = 6, heading = null, others = [] } = {}) {
+  steer(goal, speed, t, { helis = [], heliObs = [], minAgl = 6, heading = null, others = [] } = {}) {
     const d = this.d, p = d.pos, v = d.vel, sp = len(v);
     const to = sub(goal, p), gd = len(to), want = norm(to);
     const range = clamp(sp * 3 + 15, 25, 120);
     // plan with the braking the airframe reliably achieves (measured ~8.6 m/s²), not the theoretical 17
     const aBrake = 7.5;
-    // wingmen, and where each will be in ~0.8 s: avoid both
-    const near = others.filter(o => dist(o.p, p) < 90).map(o => ({ ...o, f: add(o.p, mul(o.v, 0.8)) }));
+    // wingmen and helicopters, and where each will be in ~0.8 s (1.5 s for helicopters): avoid both
+    const near = [
+      ...others.filter(o => dist(o.p, p) < 90).map(o => ({ ...o, f: add(o.p, mul(o.v, 0.8)), r: 15 })),
+      ...heliObs.filter(o => dist(o.p, p) < 200).map(o => ({ ...o, f: add(o.p, mul(o.v, 1.5)), r: 25 })),
+    ];
     if (!this.scan || t - this.scanAt > 1 / 15) { // think at 15 Hz
       const baseH = headingOf(flat(want).x || flat(want).z ? want : fwdOf(d.heading));
       let best = null;
@@ -476,12 +480,21 @@ export class Navigator {
         if (p.y < minAgl + 2 && dir.y < 0) score -= 40; // don't dive into the street
         for (const o of near) for (const q of [o.p, o.f]) { // don't fly through a wingman (now or soon)
           const rel = sub(q, p), along = dot(rel, dir);
-          if (along > 0 && along < 60) { const miss = len(sub(rel, mul(dir, along))); if (miss < 15) score -= (15 - miss) * 6; }
+          if (along > 0 && along < 60 + o.r * 2) { const miss = len(sub(rel, mul(dir, along))); if (miss < o.r) score -= (o.r - miss) * 6; }
         }
         if (!best || score > best.score) best = { dir, clear, score, wash };
       }
       // momentum goes where I'm moving, not where I want to go: check that line too
-      best.clearVel = sp > 3 ? this.clearance(p, mul(v, 1 / sp), range) : range;
+      // (and along the horizontal part alone: climb/descend changes in a blink, sideways momentum doesn't)
+      const sh = len(flat(v));
+      best.velDirs = [sp > 1 ? mul(v, 1 / sp) : null, sh > 1 ? mul(flat(v), 1 / sh) : null].filter(Boolean);
+      best.clearVel = Math.min(range, ...best.velDirs.map(u => this.clearance(p, u, range)));
+      // proximity ring (like the short-range sensors on real drones): push off any surface within 3 m
+      best.push = v3();
+      for (const q of PROX) {
+        const hit = d.world.castRay(new RAPIER.Ray(p, q), 3, true, undefined, SEE_WORLD, undefined, d.body);
+        if (hit) best.push = add(best.push, mul(q, -(3 - hit.timeOfImpact) * 2.5));
+      }
       this.scan = best; this.scanAt = t; this.last = best.dir;
     }
     const { dir, clear, clearVel } = this.scan;
@@ -493,12 +506,13 @@ export class Navigator {
     // there's room that way (never shove myself into a wall)
     for (const o of near) {
       const away = sub(p, o.p), r = len(away), closing = Math.max(0, -dot(sub(v, o.v), norm(away)));
-      const bubble = 15 + closing * 0.6;
+      const bubble = o.r + closing * 0.6;
       if (r < bubble && this.clearance(p, norm(away), 8) > 6) vel = add(vel, mul(norm(away), (bubble - r) * 1.5));
     }
+    vel = add(vel, this.scan.push);
     // already drifting toward a surface: cancel the part of the command that goes into it
-    if (sp > 0.5 && clearVel < 12) {
-      const vh = mul(v, 1 / sp), into = dot(vel, vh);
+    if (clearVel < 12) for (const vh of this.scan.velDirs ?? []) {
+      const into = dot(vel, vh);
       if (into > 0) vel = sub(vel, mul(vh, into * (1 - clearVel / 12)));
     }
     let vz = vel.y;
@@ -528,7 +542,9 @@ export class Hunter {
     const g = this.g, d = this.d, me = d.pos, target = g.player;
     if (!d.alive) { this.mode = 'DOWN'; this.thought = 'Lost power.'; d.firing = false; return d.control({ v: v3(), vz: -5, heading: d.heading }, dt); }
     this.sensors.update([target], t, g.r);
-    const helis = g.helis.map(h => h.pose.p), others = this.wingmen();
+    const heliPts = g.helis.map(h => h.pose.p), others = this.wingmen();
+    const helis = heliPts, heliObs = g.helis.map(h => ({ p: h.pose.p, v: h.pose.vel }));
+    const nav = (goal, speed, opts) => this.nav.steer(goal, speed, t, { helis, heliObs, others, ...opts });
     if (g.status === 'downed') { // you're down: the nearest goes in to confirm, the rest circle above
       const tp = target.pos, r = dist(me, tp);
       const live = g.hunters.filter(h => h.d.alive).sort((a, b) => dist(a.d.pos, tp) - dist(b.d.pos, tp));
@@ -536,12 +552,14 @@ export class Hunter {
       this.sensors.lookDir = norm(sub(tp, me));
       if (live[0] === this) {
         this.thought = `Target is down. Closing in to confirm, ${Math.round(r)} m.`;
-        return d.control(this.nav.steer(add(tp, v3(0, 3, 0)), r > 60 ? 45 : 8, t, { helis, minAgl: 1.5, heading: headingOf(sub(tp, me)), others }), dt);
+        return d.control(nav(add(tp, v3(0, 3, 0)), r > 60 ? 45 : 8, { minAgl: 1.5, heading: headingOf(sub(tp, me)) }), dt);
       }
       // wait in a stack well above the rooftops, each on its own ring and height
       const a = this.slot + t * 0.15, R = 60 + (this.i % 5) * 15;
       this.thought = `Target is down. Holding overhead while ${live[0].d.name} confirms.`;
-      return d.control(this.nav.steer(v3(tp.x + R * Math.cos(a), 110 + (this.i % 6) * 14, tp.z + R * Math.sin(a)), 25, t, { helis, minAgl: 30, heading: headingOf(sub(tp, me)), others }), dt);
+      const gx = tp.x + R * Math.cos(a), gz = tp.z + R * Math.sin(a);
+      const roof = g.roofAt(gx, gz, R);
+      return d.control(nav(v3(gx, Math.max(110, roof + 30) + (this.i % 6) * 14, gz), 25, { minAgl: 30, heading: headingOf(sub(tp, me)) }), dt);
     }
     const own = this.sensors.track(target, t, 1.0);
     if (own && (!g.link || own.t >= g.link.t)) g.link = { ...own, by: this };
@@ -557,7 +575,7 @@ export class Hunter {
       const pred = add(trk.pos, mul(trk.vel, Math.min(tti, 3)));
       const R = 70 + (this.i % 3) * 25, a = this.slot;
       const stand = r < 160 ? add(trk.pos, v3(R * Math.cos(a), 18 + (this.i % 4) * 7, R * Math.sin(a))) : pred;
-      cmd = this.nav.steer(stand, 60, t, { helis, minAgl: 4, heading: headingOf(rel), others });
+      cmd = nav(stand, 60, { minAgl: 4, heading: headingOf(rel) });
       this.sensors.lookDir = norm(rel);
       if (r < 260 && t > this.reactUntil && trk.src !== 'ACOUSTIC') { aimAt = trk; fire = true; }
       const via = own ? trk.src : `data link (${trk.by?.d.name ?? 'swarm'})`;
@@ -571,14 +589,14 @@ export class Hunter {
       const onTop = len(flat(sub(guess, me))) < 60 + (this.i % 5) * 40;
       const R = onTop ? Math.min(40 + (this.i % 5) * 40 + (t - this.searchT) * 6, 500) : 0, a = this.slot + (t - this.searchT) * 0.35;
       const goal = v3(guess.x + R * Math.cos(a), alt, guess.z + R * Math.sin(a));
-      cmd = this.nav.steer(goal, 60, t, { helis, minAgl: 20, others });
+      cmd = nav(goal, 60, { minAgl: 20 });
       this.sensors.lookDir = norm(add(flat(sub(guess, me)), v3(0, -0.6 * len(flat(sub(guess, me))) - 30, 0)));
       if (len(flat(sub(guess, me))) < 5) this.sensors.lookDir = v3(0, -1, 0);
       this.thought = me.y < alt - 20 ? `Lost you ${Math.round(since)} s ago. Climbing to ${Math.round(alt)} m to look down.` : `Searching around your last track (radius ${Math.round(R)} m).`;
     } else {
       this.mode = 'TRANSIT';
       const a = this.slot, goal = add(g.server, v3(60 * Math.cos(a), 60 + (this.i % 4) * 10, 60 * Math.sin(a)));
-      cmd = this.nav.steer(goal, 60, t, { helis, minAgl: 25, others });
+      cmd = nav(goal, 60, { minAgl: 25 });
       this.sensors.lookDir = norm(sub(g.server, me));
       this.thought = `Heading to the flagged server, ${Math.round(dist(me, g.server))} m out.`;
     }
@@ -684,6 +702,16 @@ export class Game {
       if (rr < 25 && p.y > f.y && p.y < f.y + 150) w = add(w, v3(0, 5 * (1 - rr / 25), 0));
     }
     return w;
+  }
+
+  // tallest roof within r metres of (x, z): the city is static, so a few downward rays will do
+  roofAt(x, z, r = 30) {
+    let top = 0;
+    for (const [dx, dz] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]]) {
+      const hit = this.world.castRay(new RAPIER.Ray(v3(x + dx, 600, z + dz), v3(0, -1, 0)), 600, true, undefined, SEE_SOLID);
+      if (hit) top = Math.max(top, 600 - hit.timeOfImpact);
+    }
+    return top;
   }
 
   // can the player still fly? null if yes, else the reason

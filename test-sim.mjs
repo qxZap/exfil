@@ -140,9 +140,10 @@ for (const diff of Object.keys(DIFFICULTY)) {
     const ev = new Evader(g), H = g.hunters.map(h => h.d);
     for (let i = 0; i * DT < 150 && !g.ended; i++) {
       const t = i * DT;
+      const dead = new Set(H.filter(d => !d.alive)); // wreckage falling doesn't count as another crash
       const evs = g.step(t < 1 ? { v: v3(), vz: 4, heading: 0 } : ev.command(t));
       for (const e of evs) {
-        if (e.type === 'impact' && e.who !== g.player) impacts++;
+        if (e.type === 'impact' && e.who !== g.player && !dead.has(e.who)) impacts++;
         if (e.type === 'hit' && e.who !== g.player && e.by !== g.player) friendly++;
       }
       if (i % 12 === 0) for (let a = 0; a < H.length; a++) for (let b = a + 1; b < H.length; b++) if (H[a].alive && H[b].alive) closest = Math.min(closest, dist(H[a].pos, H[b].pos));
