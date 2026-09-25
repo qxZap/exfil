@@ -277,18 +277,22 @@ export class Drone {
     const v = this.vel, m = this.mass, q = this.q, up = this.up, qi = conj(q);
     const w = rot(qi, this.body.angvel()), I = this.inertia;
     let collective, tau;
+    // posture: 'face' flies nose-first within the normal 60° limit; 'head' (sprint) tips the top of
+    // the drone into the direction of travel, as far as full power can still hold altitude
+    const mt = cmd.sprint ? this.sprintTilt() : AIRFRAME.maxTilt;
+    const total = this.rotors.reduce((sum, _, i) => sum + this.tMax(i), 0);
     if (cmd.mode === 'acro') {
       // body rates: +x = pitch nose-down, +z = roll right, +y = yaw left
       const r = cmd.rates;
       tau = v3(I.x * 22 * (r.pitch - w.x), I.y * 10 * (r.yaw - w.y), I.z * 22 * (r.roll - w.z));
-      collective = clamp(cmd.throttle, 0, 1) * 4 * AIRFRAME.maxThrust;
+      collective = cmd.cut ? 0.06 * total : clamp(cmd.throttle, 0, 1) * 4 * AIRFRAME.maxThrust;
     } else {
       let upD, az;
       const evz = cmd.vz - v.y;
       this.vzI = clamp((this.vzI ?? 0) * 0.999 + evz * dt, -4, 4);
       az = clamp(3.2 * evz + 1.2 * this.vzI, -0.85 * G, 14);
       if (cmd.mode === 'angle') {
-        const tp = clamp(cmd.tilt.fwd, -1, 1) * AIRFRAME.maxTilt, tr = clamp(cmd.tilt.right, -1, 1) * AIRFRAME.maxTilt;
+        const tp = clamp(cmd.tilt.fwd, -1, 1) * mt, tr = clamp(cmd.tilt.right, -1, 1) * mt;
         upD = norm(add(add(mul(fwdOf(cmd.heading), Math.tan(tp)), mul(rightOf(cmd.heading), Math.tan(tr))), v3(0, 1, 0)));
         this.velI = v3();
       } else {
@@ -297,15 +301,17 @@ export class Drone {
         this.velI = mul(add(this.velI, mul(ev, dt)), 0.999);
         if (len(this.velI) > 6) this.velI = mul(norm(this.velI), 6);
         let a = add(mul(ev, 1.6), mul(this.velI, 0.35));
-        const aMax = G * Math.tan(AIRFRAME.maxTilt);
+        const aMax = G * Math.tan(mt);
         if (len(a) > aMax) a = mul(norm(a), aMax);
         upD = norm(v3(a.x, G + az, a.z));
       }
-      if (upD.y < Math.cos(AIRFRAME.maxTilt)) { const h = norm(flat(upD)); upD = add(mul(h, Math.sin(AIRFRAME.maxTilt)), v3(0, Math.cos(AIRFRAME.maxTilt), 0)); }
+      if (upD.y < Math.cos(mt)) { const h = norm(flat(upD)); upD = add(mul(h, Math.sin(mt)), v3(0, Math.cos(mt), 0)); }
       // enough thrust along the tilted axis to hold the commanded climb rate
       const F = mul(upD, m * (G + az) / Math.max(upD.y, 0.35));
       // keep ~15% thrust in reserve so the attitude loop never loses authority at full power
-      collective = clamp(dot(F, up), 0, 0.85 * this.rotors.reduce((sum, _, i) => sum + this.tMax(i), 0));
+      collective = clamp(dot(F, up), 0, 0.85 * total);
+      // power cut: motors to idle (6%, enough to keep the attitude loop alive), you drop like a stone
+      if (cmd.cut) collective = 0.06 * total;
       // attitude: rotate current up onto desired up; yaw toward the commanded heading
       const eAtt = rot(qi, cross(up, upD));
       const eYaw = wrapPi(cmd.heading - this.heading);
@@ -323,6 +329,11 @@ export class Drone {
     });
     this.cmdThrust = base.map((t, i) => clamp(t + k * yawPart[i], 0, this.tMax(i)));
     this.cmd = cmd;
+  }
+  // steepest tilt at which ~85% of the available thrust still holds altitude (max 80°)
+  sprintTilt() {
+    const avail = 0.85 * this.rotors.reduce((sum, _, i) => sum + this.tMax(i), 0);
+    return clamp(Math.acos(clamp(this.mass * G * 1.03 / Math.max(avail, 1e-6), -1, 1)), AIRFRAME.maxTilt, 80 * Math.PI / 180);
   }
   mix(c, tau) { const b = [c, tau.x, tau.y, tau.z]; return this.mixM.map(row => row[0] * b[0] + row[1] * b[1] + row[2] * b[2] + row[3] * b[3]); }
   tMax(i) { return AIRFRAME.maxThrust * this.rotors[i].health * (0.82 + 0.18 * this.soc) * (this.battery.wh > 0 ? 1 : 0); }
@@ -456,7 +467,7 @@ export class Navigator {
   }
   // goal: world point; speed: wanted m/s; others: positions of friendly drones to keep clear of.
   // returns a flight-controller command
-  steer(goal, speed, t, { helis = [], heliObs = [], minAgl = 6, heading = null, others = [] } = {}) {
+  steer(goal, speed, t, { helis = [], heliObs = [], minAgl = 6, heading = null, others = [], sprint = false } = {}) {
     const d = this.d, p = d.pos, v = d.vel, sp = len(v);
     const to = sub(goal, p), gd = len(to), want = norm(to);
     const range = clamp(sp * 3 + 15, 25, 120);
@@ -518,7 +529,7 @@ export class Navigator {
     let vz = vel.y;
     const agl = p.y; // city ground is at 0; rooftops are handled by the sweep
     if (agl < minAgl) vz = Math.max(vz, (minAgl - agl) * 1.5);
-    return { v: flat(vel), vz: clamp(vz, -8, 10), heading: heading ?? (sp > 2 ? headingOf(v) : d.heading), clear, wash: this.scan.wash };
+    return { v: flat(vel), vz: clamp(vz, -8, 10), heading: heading ?? (sp > 2 ? headingOf(v) : d.heading), clear, wash: this.scan.wash, sprint };
   }
 }
 
@@ -542,9 +553,17 @@ export class Hunter {
     const g = this.g, d = this.d, me = d.pos, target = g.player;
     if (!d.alive) { this.mode = 'DOWN'; this.thought = 'Lost power.'; d.firing = false; return d.control({ v: v3(), vz: -5, heading: d.heading }, dt); }
     this.sensors.update([target], t, g.r);
+    // battery discipline: sprint only with charge to spare; nearly flat -> land instead of falling
+    if (d.soc < 0.1) {
+      this.mode = 'LANDING'; d.firing = false;
+      this.thought = `Battery ${Math.round(d.soc * 100)}%. Landing before I fall.`;
+      if (d.agl < 0.6 && len(d.vel) < 1) { d.alive = false; d.deathCause = 'landed'; d.landed = true; }
+      return d.control(this.nav.steer(v3(me.x, 0, me.z), 4, t, { minAgl: 0 }), dt);
+    }
     const heliPts = g.helis.map(h => h.pose.p), others = this.wingmen();
     const helis = heliPts, heliObs = g.helis.map(h => ({ p: h.pose.p, v: h.pose.vel }));
-    const nav = (goal, speed, opts) => this.nav.steer(goal, speed, t, { helis, heliObs, others, ...opts });
+    // sprint ('head' posture) when the goal is far and the battery can take it
+    const nav = (goal, speed, opts) => this.nav.steer(goal, speed, t, { helis, heliObs, others, sprint: d.soc > 0.4 && dist(goal, me) > 220, ...opts });
     if (g.status === 'downed') { // you're down: the nearest goes in to confirm, the rest circle above
       const tp = target.pos, r = dist(me, tp);
       const live = g.hunters.filter(h => h.d.alive).sort((a, b) => dist(a.d.pos, tp) - dist(b.d.pos, tp));

@@ -65,6 +65,30 @@ function place(g, d, p) { d.body.setTranslation(p, true); d.body.setLinvel(v3(),
   check('ACRO mode: barrel roll', minUp < -0.9 && P.up.y > 0.95, `inverted (up.y ${minUp.toFixed(2)}), back level (up.y ${P.up.y.toFixed(2)}), lost ${(y0 - P.pos.y).toFixed(0)} m`);
 }
 
+// 2c. HEAD-first sprint is faster (and keeps the difficulty ratios); power cut drops fast and recovers
+{
+  const g = await open(); g.weather.ambient = () => v3();
+  const rows = Object.entries(DIFFICULTY).map(([k, d], i) => {
+    const dr = new Drone(g.world, { pos: v3(-1700, 380, -1700 + i * 200), heading: Math.PI / 2, speed: d.speed }); dr.rand = g.r; g.drones.push(dr);
+    return { k, d, dr, vmax: 0 };
+  });
+  for (let i = 0; i * DT < 30; i++) {
+    for (const r of rows) r.dr.control({ mode: 'angle', tilt: { fwd: 1, right: 0 }, vz: 0, heading: Math.PI / 2, sprint: true }, DT);
+    g.step(hoverCmd);
+    if (i * DT > 18) for (const r of rows) r.vmax = Math.max(r.vmax, len(flat(r.dr.vel)));
+  }
+  const base = rows[0].vmax, worst = Math.max(...rows.map(r => Math.abs(r.vmax / base - r.d.speed)));
+  check('HEAD-first sprint: faster, same ratios', base > 27 * 1.25 && worst < 0.03, rows.map(r => `${r.k} ${r.vmax.toFixed(1)} m/s`).join(', ') + ` (face-first easy: 27.0)`);
+  const P = g.player; place(g, P, v3(-1500, 300, 1500));
+  for (let i = 0; i * DT < 2; i++) g.step(hoverCmd);
+  let minVz = 0; const y0 = P.pos.y;
+  for (let i = 0; i * DT < 3; i++) { g.step({ ...hoverCmd, mode: 'angle', tilt: { fwd: 0, right: 0 }, cut: true }); minVz = Math.min(minVz, P.vel.y); }
+  const yCut = P.pos.y; let yMin = yCut;
+  for (let i = 0; i * DT < 5; i++) { g.step(hoverCmd); yMin = Math.min(yMin, P.pos.y); }
+  check('power cut (G): fast drop, level, recovers', minVz < -11 && Math.acos(P.up.y) < 0.2 && yCut - yMin < 15,
+    `dropped ${(y0 - yCut).toFixed(0)} m in 3 s (${(-minVz).toFixed(1)} m/s), caught itself within ${(yCut - yMin).toFixed(0)} m`);
+}
+
 // 3. damage: half a rotor still flies; a lost rotor brings a quad down
 {
   const g = await open(), P = g.player;

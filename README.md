@@ -21,8 +21,10 @@ npm start          # → http://localhost:8080
 | `Space` / `X` | climb / descend (in ACRO: throttle up / down) |
 | `F` | flight mode: **ANGLE** · **ACRO** · **ASSIST** |
 | `C` (or `V`) | third person / first person (FPV, bolted to the airframe, rolls with it) |
+| `H` | posture: **FACE** first (60° max tilt) or **HEAD** first: tips up to ~72° so all power goes to speed, +35% (36 m/s), about 2× the battery drain |
+| `G` (hold) | power cut: motors to idle, drop at ~13 m/s while staying level; release to catch yourself (~6 m) |
 | `B` | intercepted hunter telemetry: what the hunters are thinking |
-| `H` | show / hide the on-screen controls panel |
+| `K` | show / hide the on-screen controls panel |
 | `R` | restart the same city (any time, or on the end screen); `Enter` on the end screen: new city |
 
 **Flight modes**, like a real flight controller:
@@ -87,6 +89,7 @@ They fly as a swarm:
 - **CHASE:** they intercept at the point where you'll be. Close in, each takes its **own slot** around you (spread by the golden angle over three rings and several heights), so the swarm surrounds you instead of queueing. They fire in bursts using a lead solution (your velocity, their own, bullet drop).
 - **SEARCH:** when the link loses you, they climb to at least 140 m to look down over the rooftops, go to where you'd be if you'd kept going, and **fan out** in expanding circles at different heights.
 - **CONFIRM:** once you're downed, the *nearest* hunter flies in, low and slow, to within 8 m. The rest hold in a stack above the rooftops.
+- **Sprint and battery:** hunters fly HEAD first (the same +35%) when the goal is far and they have more than 40% charge. At 10% they land rather than fall.
 - **Always:**
   - **Clearance:** each hunter sweeps its body along about 60 3D directions to find a clear path. Helicopter downwash counts as an obstacle, and so do wingmen: where they are now *and* where they'll be in 0.8 s.
   - **Personal space:** each keeps its distance from wingmen, earlier when closing fast, and never gets pushed into a wall by it.
