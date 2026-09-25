@@ -170,11 +170,11 @@ export function createWorld({ renderer, camera }) {
       sh.uniforms.uNight = NIGHT;
       sh.uniforms.tWin = { value: winAtlas };
       sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute vec3 aSize; attribute float aSeed;\nvarying vec3 vLocal; varying vec3 vSize; varying float vSeed;')
+        .replace('#include <common>', '#include <common>\nattribute vec3 aSize; attribute float aSeed;\nvarying vec3 vLocal; flat varying vec3 vSize; flat varying float vSeed;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\n vLocal = position * aSize; vSize = aSize; vSeed = aSeed;');
       sh.fragmentShader = sh.fragmentShader
         .replace('#include <common>', `#include <common>
-  varying vec3 vLocal; varying vec3 vSize; varying float vSeed;
+  varying vec3 vLocal; flat varying vec3 vSize; flat varying float vSeed;
   uniform float uNight;
   uniform sampler2D tWin; // atlas: punched | ribbon | curtain | house
   // a 1-D band [lo, hi] with edges softened by the pixel footprint w

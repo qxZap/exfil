@@ -277,7 +277,7 @@ function frame(now) {
   if (!game) return;
   if (running) {
     acc += dtReal;
-    const cmd = playerCommand(dtReal);
+    const cmd = window.exfil.pilot?.(game) ?? playerCommand(dtReal); // pilot: a scripted flyer for demo recordings
     const ts = performance.now();
     for (let n = 0; acc >= DT && n < 12; n++, acc -= DT) {
       for (const e of game.step(cmd)) {

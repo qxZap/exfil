@@ -216,10 +216,14 @@ function overlay(tile, T) {
   // header + decision line
   g2.fillStyle = 'rgba(0,0,0,.55)'; g2.fillRect(tile.x, tile.y, tile.w, fs + 8);
   g2.fillStyle = col; g2.font = `bold ${fs}px ui-monospace, Consolas`;
-  g2.fillText(`${h.d.name.toUpperCase()} · ${h.mode}${x.lead ? ' · LEAD' : ''}${x.sprint ? ' · SPRINT' : ''}`, tile.x + 8, tile.y + fs + 2);
+  const title = `${h.d.name.toUpperCase()} · ${h.mode}${x.lead ? ' · LEAD' : ''}${x.sprint ? ' · SPRINT' : ''}`;
+  g2.fillText(title, tile.x + 8, tile.y + fs + 2);
+  const room = tile.w - 24 - g2.measureText(title).width;
   g2.textAlign = 'right'; g2.font = `${fs}px ui-monospace, Consolas`;
-  const spd = Math.hypot(x.vel[0], x.vel[1], x.vel[2]);
-  g2.fillText(`${Math.round(spd * 3.6)} km/h · ${Math.round(h.d.pos.y)} m · bat ${Math.round(x.soc * 100)}% · hull ${x.hull}%`, tile.x + tile.w - 8, tile.y + fs + 2);
+  const spd = Math.round(Math.hypot(x.vel[0], x.vel[1], x.vel[2]) * 3.6), alt = Math.round(h.d.pos.y);
+  // as much of the telemetry as fits beside the title
+  const stats = [`${spd} km/h · ${alt} m · bat ${Math.round(x.soc * 100)}% · hull ${x.hull}%`, `${spd} km/h · ${alt} m · bat ${Math.round(x.soc * 100)}%`, `${spd} km/h · ${alt} m`, `${spd} km/h`].find(t => g2.measureText(t).width < room);
+  if (stats) g2.fillText(stats, tile.x + tile.w - 8, tile.y + fs + 2);
   g2.textAlign = 'left';
   if (!big) { // decision feed: the last few things it decided, newest at the bottom
     const list = (history.get(tile.i) ?? []).slice(-(tile.h > 300 ? 4 : tile.h > 190 ? 3 : 2)), lh = fs + 4;
