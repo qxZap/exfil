@@ -2,9 +2,26 @@
 
 **You're a quadcopter on a rooftop with stolen data. Hunter drones are coming. Get 700 m clear of every one of them.**
 
-This is a drone escape game in a procedurally generated city about 4 km across. It has downtown towers, midtown blocks, an industrial sector, parks and suburbs, with traffic, patrolling helicopters and burning buildings. Both you and the hunters fly the same physically simulated airframe: per-rotor thrust, motor lag, battery sag, drag, wind, downwash and real damage. Only the hunters' brains are AI.
+This is a drone escape game in a procedurally generated city about 4 km across. It has downtown towers, midtown blocks, an industrial sector, parks and suburbs, with traffic, patrolling helicopters and burning buildings. Both you and the hunters fly the same physically simulated airframe: per-rotor thrust, motor lag, battery sag, drag, wind, downwash and real damage. Only the hunters' brains are different: autonomous, hand-written control, not a neural network.
 
-> Private for now. Screenshots will be added once they're approved.
+![The player's view: a hunter swarm closing in, radar top right, intercepted enemy radio bottom left](docs/media/player.jpg)
+
+![The hunter monitor: every hunter's camera, its targeting, its own radar scope and what it's deciding](docs/media/monitor.jpg)
+
+**Videos** (the same chase, recorded from both sides): [the player's view](docs/media/player.mp4) · [the hunter monitor, all nine hunters](docs/media/monitor.mp4) · [one hunter up close: telemetry, decision log, radar](docs/media/monitor-focus.mp4)
+
+## What this shows
+
+The hunters are about 260 lines of plain code (`Sensors`, `Navigator` and `Hunter` in [sim.js](sim.js)). There's no machine learning and no GPU, and a hunter's thinking takes about 0.06 ms per step on one CPU core. With only that, a swarm:
+
+- **finds you** with radar, a narrow camera and microphones, each limited by real line of sight (see `npm run audit`);
+- **shares every sighting** over a data link, so one hunter seeing you means all of them know;
+- **surrounds you** instead of queueing behind each other, each flying to its own slot;
+- **searches when it loses you**: it climbs high to look down, then fans out around where you were heading;
+- **holds fire when a wingman is in the way**, flies round buildings, and never crashes into anything in the test games;
+- **confirms the kill** when you go down.
+
+Autonomy like this is not exotic or expensive. It's a few hundred lines on hardware anyone can buy. This project exists so people can see what that looks like, and what it takes to hide from it.
 
 ## Play
 

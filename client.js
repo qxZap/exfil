@@ -189,7 +189,7 @@ function hud() {
   $('spd').textContent = `${Math.round(len(vel) * 3.6)} km/h`;
   $('alt').textContent = `${agl.toFixed(0)} / ${P.pos.y.toFixed(0)} m`;
   $('vz').textContent = `${vel.y >= 0 ? '+' : ''}${vel.y.toFixed(1)} m/s`;
-  $('hdg').textContent = `${String(Math.round(((P.heading * 180 / Math.PI) % 360 + 360) % 360)).padStart(3, '0')}° · ${Math.round(Math.acos(Math.min(1, P.up.y)) * 57.3)}°`;
+  $('hdg').textContent = `${String(Math.round(((P.heading * 180 / Math.PI) % 360 + 360) % 360)).padStart(3, '0')}° · ${Math.round(Math.acos(Math.max(-1, Math.min(1, P.up.y))) * 57.3)}°`;
   const w = game.windAt(P.pos);
   $('wind').textContent = `${len(flat(w)).toFixed(1)} m/s${w.y < -2 ? ` · DOWNWASH ${(-w.y).toFixed(0)}` : w.y > 2 ? ` · UPDRAFT ${w.y.toFixed(0)}` : ''}`;
   const soc = P.soc * 100, left = P.battery.wh / Math.max(P.battery.powerW, 1) * 60;
